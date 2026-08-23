@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pyqtgraph as pg
 from PySide6.QtCore import QTimer, Signal
+from PySide6.QtGui import QPainter, QPicture
 
 from csv_plot_maker.plotting.subplot_view import SubplotView
 
@@ -66,10 +67,38 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
         axes = [view.plot_item.getAxis("left") for view in self._views.values()]
         for axis in axes:
             axis.setWidth(None)
+            self._refresh_axis_text_width(axis)
         max_width = max((axis.width() for axis in axes), default=0)
         if max_width > 0:
             for axis in axes:
                 axis.setWidth(max_width)
+
+    @staticmethod
+    def _refresh_axis_text_width(axis: pg.AxisItem) -> None:
+        """Force AxisItem to (re)measure the width its *current* tick labels
+        need, instead of trusting whatever it last measured.
+
+        AxisItem only updates its cached natural width as a side effect of
+        actually being painted by Qt, which is not guaranteed to have
+        happened yet for this axis's current range right after a zoom/pan/
+        data change -- e.g. immediately after zooming out to a range whose
+        tick labels need more digits than before. Reading back a stale,
+        too-narrow width here and then pinning every subplot's left axis to
+        it (see _sync_left_axis_widths) is what clipped the newer, wider
+        labels: once fixedWidth is set, AxisItem stops recomputing its own
+        size from new tick content, so the too-small width would otherwise
+        stick permanently. Running the same tick-drawing computation Qt's
+        paint() would run, into a throwaway QPicture, forces that
+        measurement to happen right now instead.
+        """
+        picture = QPicture()
+        painter = QPainter(picture)
+        try:
+            if axis.style["tickFont"]:
+                painter.setFont(axis.style["tickFont"])
+            axis.generateDrawSpecs(painter)
+        finally:
+            painter.end()
 
     def get_view(self, row: int, col: int) -> SubplotView:
         return self._views[(row, col)]

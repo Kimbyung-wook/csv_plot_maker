@@ -31,7 +31,16 @@ class SubplotView:
         # and the legend). Push them behind explicitly so the grid is always
         # a background layer.
         for name in ("top", "bottom", "left", "right"):
-            self.plot_item.getAxis(name).setZValue(-10)
+            axis = self.plot_item.getAxis(name)
+            axis.setZValue(-10)
+            # pyqtgraph scales how many major/minor ticks it's willing to
+            # draw down with the axis's pixel length, so a short axis (many
+            # subplots stacked in one grid) can end up with only one or two
+            # labeled gridlines even when the visible Y range spans a much
+            # larger scale -- e.g. only "0" showing for a range that goes up
+            # to several thousand. Raising the density keeps enough ticks to
+            # actually read the range at any zoom level or grid size.
+            axis.setTickDensity(1.75)
 
         self.plot_item.addLegend()
         # Within the ViewBox's own children, later-added items stack on top
