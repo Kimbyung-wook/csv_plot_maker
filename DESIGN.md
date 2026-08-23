@@ -24,6 +24,7 @@ CSV 데이터를 불러와 다중 subplot 그래프로 시각화하는 데스크
 - 좌측(Load CSV and View datalist) 도크: CSV 열기, 컬럼 리스트 표시
 - 우측(Configure subplot) 도크는 세 영역이 위→아래로 쌓인 구조:
   1. 상단: Rows/Cols 스핀박스만 존재 — Apply 버튼 없이 값 변경 즉시 grid 재구성(live-apply), Clear This Subplot / Clear All Subplots 버튼
+     - **grid 재구성 후에도 기존 subplot들의 X축 범위(팬/줌 상태)를 그대로 유지** *(2026-08-23 추가)*: rows/cols를 바꾸면 내부적으로 모든 subplot의 PlotItem이 새로 만들어져 X 범위가 기본값(0~1)으로 초기화되는데, 재구성 직전 각 subplot의 X 범위를 위치(row, col) 기준으로 기억해뒀다가 재구성 후 그대로 복원함 — "Link X axis across subplots"가 켜져 있을 때도 동일하게 적용(재구성 도중 참조 subplot의 아직-비어있는 기본 범위가 다른 subplot에 잘못 전파되던 문제도 같이 해결됨)
   2. 중단: 활성 subplot의 X축 컬럼 선택 + Y 시리즈 목록 + 범례 표시 토글
   3. 하단: 기본적으로 숨김. Y 시리즈를 선택했을 때만 나타나며 스타일 컨트롤(색상/선모양/마커/굵기), 이중축(주/보조) 선택, 해당 시리즈 삭제 버튼을 포함
 

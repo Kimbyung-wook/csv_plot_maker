@@ -249,6 +249,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
 
     def _on_grid_dims_changed(self, rows: int, cols: int) -> None:
+        # rebuild() below throws away every subplot's PlotItem/ViewBox --
+        # including whatever X range the user had panned/zoomed to -- and
+        # replaces them with fresh ones that start at the default (0, 1)
+        # range. Capture each surviving subplot's current X range by
+        # position first so it can be restored afterward instead of
+        # silently resetting every other subplot's zoom just because the
+        # grid dimensions changed.
+        previous_x_ranges = {
+            (row, col): view.plot_item.vb.viewRange()[0] for (row, col), view in self.plot_grid.views().items()
+        }
+
         self.project.resize_grid(rows, cols)
         self.plot_grid.rebuild(rows, cols)
 
@@ -258,6 +269,11 @@ class MainWindow(QMainWindow):
         self._refresh_subplot_selector()
         self._refresh_active_subplot_controls()
         self._replot_all_subplots()
+
+        for subplot in self.project.subplots:
+            prev_range = previous_x_ranges.get((subplot.row, subplot.col))
+            if prev_range is not None:
+                self.plot_grid.get_view(subplot.row, subplot.col).plot_item.setXRange(*prev_range, padding=0)
 
     def _on_active_subplot_changed(self, subplot_id: str) -> None:
         self.project.active_subplot_id = subplot_id

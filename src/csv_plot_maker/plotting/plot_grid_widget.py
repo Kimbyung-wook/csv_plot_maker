@@ -103,6 +103,9 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
     def get_view(self, row: int, col: int) -> SubplotView:
         return self._views[(row, col)]
 
+    def views(self) -> dict[tuple[int, int], SubplotView]:
+        return dict(self._views)
+
     def set_link_x_axes(self, enabled: bool) -> None:
         """When enabled, panning/zooming any subplot's X axis applies the same
         X range to every other subplot (their own Y axes are left untouched).
