@@ -118,6 +118,13 @@ class SubplotView:
     def set_labels(self, x_label: str, y_label_left: str, y_label_right: str = "") -> None:
         self.plot_item.setLabel("bottom", x_label)
         self.plot_item.setLabel("left", y_label_left)
+        # The left axis's width is a fixed constant regardless of whether a
+        # title is set (see PlotGridWidget._TITLE_GUTTER), so typing one in
+        # or clearing it never actually changes the axis's pixel geometry --
+        # which means Qt's own resizeEvent (the only place pyqtgraph
+        # repositions the rotated title text) never fires, leaving a
+        # freshly-typed title vertically off-center against stale geometry.
+        self._recenter_left_axis_label()
         # PlotItem.setLabel() unconditionally calls showAxis() as a side
         # effect, even for an empty label -- so without this, relabeling
         # (which happens on every replot: adding a series, editing any axis
@@ -125,6 +132,18 @@ class SubplotView:
         # on regardless of whether any series actually uses it.
         self.plot_item.setLabel("right", y_label_right)
         self._update_right_axis_visibility()
+
+    def _recenter_left_axis_label(self) -> None:
+        # Mirrors AxisItem.resizeEvent()'s own centering formula for a
+        # "left"-orientation label rather than calling resizeEvent() itself:
+        # doing that manually (outside a real Qt-triggered resize) was found
+        # to occasionally recurse into sizeHint()/boundingRect() in a way
+        # that raised RuntimeErrors during widget teardown.
+        axis = self.plot_item.getAxis("left")
+        if axis.label is None:
+            return
+        br = axis.label.boundingRect()
+        axis.label.setPos(-5, axis.size().height() / 2 + br.width() / 2)
 
     def set_legend_visible(self, visible: bool) -> None:
         if self.plot_item.legend is not None:

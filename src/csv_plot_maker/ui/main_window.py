@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import QApplication, QDockWidget, QFileDialog, QInputDialog, QMainWindow, QVBoxLayout, QWidget
@@ -170,6 +171,12 @@ class MainWindow(QMainWindow):
         # regardless of the show_legend toggle -- otherwise a bare legend
         # box with no entries sits in the corner of a blank plot.
         view.set_legend_visible(subplot.show_legend and bool(subplot.series))
+        # Adding/clearing a Y-axis title changes how much width that axis
+        # needs but doesn't touch the Y range, so it wouldn't otherwise
+        # trigger the left-axis width re-sync -- leaving a newly-typed title
+        # squeezed into whatever (too-narrow) width was pinned before it
+        # existed, overlapping the tick numbers.
+        self.plot_grid.schedule_axis_width_sync()
 
     def _replot_all_subplots(self) -> None:
         for subplot in self.project.subplots:
@@ -243,10 +250,51 @@ class MainWindow(QMainWindow):
         self._refresh_active_subplot_controls()
         self._replot_all_subplots()
 
+        # See the matching comment in _load_layout_from_path: if the restored
+        # layout has link_x_axes on, _refresh_subplot_selector() above just
+        # broadcast the still-empty default (0, 1) X range to every subplot,
+        # which disables their autoRange before _replot_all_subplots() had
+        # any real data to fit. Auto-range now that it exists, same as
+        # clicking each subplot's "A" button, then re-sync the link with the
+        # now-correct reference range.
+        self._autorange_all_views()
+
         message = f"{store.row_count:,} rows loaded from {store.source_path} in {store.load_time_ms:.0f} ms"
         if loaded_saved_layout:
             message += f" -- restored layout from {config_path.name}"
         self.statusBar().showMessage(message)
+
+    def _autorange_all_views(self) -> None:
+        """Fit every subplot's X and Y range to its actual data, same as
+        clicking each one's "A" (auto range) button.
+
+        Deliberately computed directly from column_store rather than by
+        asking pyqtgraph's ViewBox to auto-fit (via enableAutoRange()/
+        autoRange()/updateAutoRange()): all three were tried and, called
+        immediately after a fresh replot, computed a bogus tiny range --
+        pyqtgraph's own auto-fit depends on the curve's on-screen
+        downsampled/clipped representation, whose geometry hasn't actually
+        propagated through Qt's scene graph yet at this point, and no amount
+        of extra processEvents() after enabling it made that reliable.
+        Computing the range ourselves from the raw column data has no such
+        dependency on Qt's layout timing.
+        """
+        if self.column_store is None:
+            return
+        for subplot in self.project.subplots:
+            if not subplot.series or not subplot.x_column:
+                continue
+            view = self.plot_grid.get_view(subplot.row, subplot.col)
+            x_data = self.column_store.get(subplot.x_column)
+            x_min, x_max = float(np.nanmin(x_data)), float(np.nanmax(x_data))
+            y_min = min(float(np.nanmin(self.column_store.get(s.y_column))) for s in subplot.series)
+            y_max = max(float(np.nanmax(self.column_store.get(s.y_column))) for s in subplot.series)
+            if x_max > x_min:
+                view.plot_item.setXRange(x_min, x_max, padding=0.02)
+            if y_max > y_min:
+                view.plot_item.setYRange(y_min, y_max, padding=0.02)
+        if self.project.link_x_axes:
+            self.plot_grid.set_link_x_axes(True)
 
     def _on_grid_dims_changed(self, rows: int, cols: int) -> None:
         # rebuild() below throws away every subplot's PlotItem/ViewBox --
@@ -256,8 +304,17 @@ class MainWindow(QMainWindow):
         # position first so it can be restored afterward instead of
         # silently resetting every other subplot's zoom just because the
         # grid dimensions changed.
+        # Subplots with no series yet are still sitting at the meaningless
+        # pyqtgraph default (0, 1) -- pinning that "previous" range after
+        # the resize would permanently disable autoRange for them, so any
+        # data dropped onto them afterward would stay stuck at (0, 1)
+        # instead of fitting. Only preserve subplots that actually had
+        # something plotted.
+        populated_positions = {(sp.row, sp.col) for sp in self.project.subplots if sp.series}
         previous_x_ranges = {
-            (row, col): view.plot_item.vb.viewRange()[0] for (row, col), view in self.plot_grid.views().items()
+            (row, col): view.plot_item.vb.viewRange()[0]
+            for (row, col), view in self.plot_grid.views().items()
+            if (row, col) in populated_positions
         }
 
         self.project.resize_grid(rows, cols)
@@ -447,6 +504,18 @@ class MainWindow(QMainWindow):
         self._refresh_subplot_selector()
         self._refresh_active_subplot_controls()
         self._replot_all_subplots()
+
+        # _refresh_subplot_selector() above applies the loaded link_x_axes
+        # setting, which -- if enabled -- broadcasts the (at that point
+        # still empty) reference subplot's default (0, 1) X range to every
+        # other subplot before _replot_all_subplots() has added their real
+        # data. setXRange() disables autoRange, so without this, every
+        # subplot would be stuck at (0, 1) forever instead of fitting the
+        # data that was only just added. Auto-range everything now that the
+        # data actually exists -- the same as clicking each subplot's "A"
+        # (auto range) button -- then, if X-linking is on, re-broadcast
+        # using the now-correctly-fitted reference range.
+        self._autorange_all_views()
 
         message = f"Loaded layout from {Path(path).name}"
         if dropped:
