@@ -66,7 +66,12 @@ CSV 데이터를 불러와 다중 subplot 그래프로 시각화하는 데스크
 - Settings 메뉴 → Theme 서브메뉴에서 Light mode / Dark mode / System mode 중 택1 (배타적 선택)
 - 테마 전환 시 배경/전경/축/범례 색상이 모두 함께 갱신
 
-### 2.9 저장/불러오기 진입점 (File 메뉴)
+### 2.9 Info 메뉴 — 라이선스 안내 *(2026-08-23 추가)*
+- 메뉴바에 **Info → License Info**로 팝업(`LicenseDialog`)을 띄움
+- 내용: 앱 버전/빌드일자, 번들된 서드파티 라이브러리별 라이선스 표(PySide6/shiboken6=LGPL-3.0-only, pyqtgraph=MIT, polars=MIT, NumPy=BSD-3-Clause), 그리고 **사내/상업적 사용 관련 안내**: PySide6는 LGPLv3라 동적 링크(이 프로젝트의 PyInstaller `--onedir` 빌드가 이 조건에 해당)를 유지하면 소스 공개 없이 사내/상업적 배포가 가능하다는 요지와, 이는 법률 자문이 아니므로 조직 외부·대규모 배포 시 라이선스 조건을 다시 확인하라는 면책 문구
+- 이 앱 자체(csv-plot-maker)의 라이선스는 별도로 지정하지 않았음을 명시
+
+### 2.10 저장/불러오기 진입점 (File 메뉴)
 - Save Layout: CSV 파일명 기반 고정 경로에 JSON으로 저장
 - Save Layout As...: 사용자가 파일명을 직접 선택해 저장 (기본값 = CSV 이름)
 - Load Layout: 저장된 JSON을 불러와 현재 프로젝트를 대체

@@ -17,6 +17,7 @@ from csv_plot_maker.plotting.style_map import next_default_color
 from csv_plot_maker.ui import theme
 from csv_plot_maker.ui.csv_panel import CsvPanel
 from csv_plot_maker.ui.grid_config_panel import GridConfigPanel
+from csv_plot_maker.ui.license_dialog import LicenseDialog
 from csv_plot_maker.ui.series_panel import SeriesPanel
 from csv_plot_maker.ui.style_panel import StylePanel
 
@@ -104,6 +105,13 @@ class MainWindow(QMainWindow):
             action.setChecked(mode == "system")
             action.triggered.connect(lambda _checked=False, m=mode: self._apply_theme(m))
             theme_group.addAction(action)
+
+        info_menu = self.menuBar().addMenu("Info")
+        license_action = info_menu.addAction("License Info")
+        license_action.triggered.connect(self._on_show_license_info)
+
+    def _on_show_license_info(self) -> None:
+        LicenseDialog(self).exec()
 
     # -- helpers -----------------------------------------------------------
 
