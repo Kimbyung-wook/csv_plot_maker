@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+
+import psutil
 from PySide6.QtCore import QMimeData, QThreadPool, Qt, Signal
 from PySide6.QtGui import QDrag, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -10,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QProgressDialog,
     QPushButton,
     QVBoxLayout,
@@ -19,6 +23,15 @@ from PySide6.QtWidgets import (
 from csv_plot_maker.data.column_store import ColumnStore
 from csv_plot_maker.data.loader import load_csv, peek_schema
 from csv_plot_maker.utils.workers import CallableWorker
+
+# How many times a CSV's on-disk size a full load might need in RAM at peak,
+# even after loader.py's own memory-reduction steps (skipping non-numeric
+# columns, releasing polars' own copy of each column as it converts) --
+# polars' CSV parser itself still uses working buffers beyond the final
+# DataFrame, and numeric text doesn't map 1:1 to its binary size. Deliberately
+# conservative: a false-positive warning costs the user two clicks, a false
+# negative can hang their whole machine.
+_MEMORY_WARNING_MULTIPLIER = 2.0
 
 
 class DraggableColumnList(QListWidget):
@@ -159,6 +172,40 @@ class CsvPanel(QWidget):
         if path:
             self.load_path(path)
 
+    def _confirm_memory_headroom(self, path: str) -> bool:
+        """Warn (with a chance to back out) before a load that looks likely
+        to exceed available RAM, rather than silently attempting it and
+        potentially hanging the whole machine with no warning at all.
+
+        Fails open: if the file size or the system memory query can't be
+        read for any reason, this doesn't block the load.
+        """
+        try:
+            file_size = os.path.getsize(path)
+            # .available (not .free) already accounts for memory the OS
+            # could readily reclaim from its own disk cache, so it's a
+            # realistic "usable" figure rather than an overly pessimistic one.
+            available = psutil.virtual_memory().available
+        except (OSError, psutil.Error):
+            return True
+
+        estimated_need = file_size * _MEMORY_WARNING_MULTIPLIER
+        if estimated_need <= available:
+            return True
+
+        reply = QMessageBox.warning(
+            self,
+            "Large file warning",
+            f"This CSV is {file_size / 1e9:.1f} GB and may need approximately "
+            f"{estimated_need / 1e9:.1f} GB of RAM to load, but only "
+            f"{available / 1e9:.1f} GB is currently available.\n\n"
+            "Loading it anyway may make your computer unresponsive.\n\n"
+            "Load anyway?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
+
     def load_path(self, path: str) -> None:
         self.path_label.setText(path)
         self.status_label.setText("Reading columns...")
@@ -172,6 +219,10 @@ class CsvPanel(QWidget):
 
         for name in names:
             self.column_list.addItem(QListWidgetItem(name))
+
+        if not self._confirm_memory_headroom(path):
+            self.status_label.setText("Load canceled -- file too large for available memory")
+            return
 
         # The column list above is populated immediately, but series can't be
         # dropped onto a subplot until the full column data has been parsed

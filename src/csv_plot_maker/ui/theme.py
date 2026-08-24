@@ -56,7 +56,17 @@ def apply_app_theme(app: QApplication, mode: str) -> tuple[str, str]:
     grid separately (PlotGridWidget.set_theme_colors).
     """
     resolved = resolve_mode(mode)
-    app.setStyle("Fusion")
+    # Only apply the style once, ever -- re-calling QApplication.setStyle()
+    # with the *same* style on every theme switch is redundant (only the
+    # palette actually needs to change between light/dark), and doing it
+    # repeatedly against a large, complex pyqtgraph scene (many subplots,
+    # each with several AxisItems/ViewBoxes) has been observed to crash the
+    # process outright (Windows access violation) on the second or later
+    # switch, under real (non-offscreen) rendering. Skipping the redundant
+    # re-application avoids the crash entirely without losing anything --
+    # the style was already "Fusion" from the first call.
+    if app.style().objectName().lower() != "fusion":
+        app.setStyle("Fusion")
     if resolved == "dark":
         app.setPalette(_dark_palette())
         return DARK_PLOT_BACKGROUND, DARK_PLOT_FOREGROUND

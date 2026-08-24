@@ -1,0 +1,274 @@
+{
+  "grid_rows": 4,
+  "grid_cols": 2,
+  "active_subplot_id": "8def3551fb694fd3bbb74a6f851bc650",
+  "subplots": [
+    {
+      "row": 0,
+      "col": 0,
+      "x_column": "timestamp",
+      "x_label": "timestamp [sec]",
+      "y_label_left": "Axy [m/s2]",
+      "y_label_right": "Az [m/s2]",
+      "show_legend": true,
+      "series": [
+        {
+          "y_column": "Sens_Ax",
+          "axis": "primary",
+          "color": "#1f77b4",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "555bb014ebfa4ddfb3582e9a8d56820d"
+        },
+        {
+          "y_column": "Sens_Ay",
+          "axis": "primary",
+          "color": "#ff7f0e",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "11ed6adfa22548849d57b86f815b5000"
+        },
+        {
+          "y_column": "Sens_Az",
+          "axis": "secondary",
+          "color": "#2ca02c",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "c173f42262da4b869cfda3cf543a383a"
+        }
+      ],
+      "id": "882986b249fc4f4581d638c9560583a1"
+    },
+    {
+      "row": 0,
+      "col": 1,
+      "x_column": "timestamp",
+      "x_label": "",
+      "y_label_left": "Throttle [%]",
+      "y_label_right": "Engine RPM",
+      "show_legend": true,
+      "series": [
+        {
+          "y_column": "Engine_RPM",
+          "axis": "secondary",
+          "color": "#1f77b4",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "7932233c4c17449fa15d5b074ff643cd"
+        },
+        {
+          "y_column": "THROTTLE_COMMAND_LINEAR",
+          "axis": "primary",
+          "color": "#ff7f0e",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "e10e9414bbd84c498814cb026802f5b0"
+        },
+        {
+          "y_column": "THROTTLE_FEEDBACK_LINEAR_REV",
+          "axis": "primary",
+          "color": "#2ca02c",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "dec04d5529ea42fda6af60b20f245864"
+        }
+      ],
+      "id": "e7dc1f497bf1486eb508f46e6f2930a3"
+    },
+    {
+      "row": 1,
+      "col": 0,
+      "x_column": "timestamp",
+      "x_label": "timestamp [sec]",
+      "y_label_left": "Roll/Pitch [deg]",
+      "y_label_right": "Yaw [deg]",
+      "show_legend": true,
+      "series": [
+        {
+          "y_column": "Sens_phi",
+          "axis": "primary",
+          "color": "#1f77b4",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "abcef4524faa43dab332249d32418737"
+        },
+        {
+          "y_column": "Sens_theta",
+          "axis": "primary",
+          "color": "#ff7f0e",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "0669f07dd42b4b29b47ec8b91404eccd"
+        },
+        {
+          "y_column": "Sens_psi",
+          "axis": "secondary",
+          "color": "#2ca02c",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "b3f0c28544584a618ee559baacf0efaf"
+        }
+      ],
+      "id": "8def3551fb694fd3bbb74a6f851bc650"
+    },
+    {
+      "row": 1,
+      "col": 1,
+      "x_column": "timestamp",
+      "x_label": "",
+      "y_label_left": "Pressure [psi] / CV [%]",
+      "y_label_right": "Pump RPM",
+      "show_legend": true,
+      "series": [
+        {
+          "y_column": "FUEL_PRESSURE",
+          "axis": "primary",
+          "color": "#1f77b4",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "8d10abee541e4a85b4ed593f5aee5c65"
+        },
+        {
+          "y_column": "FUEL_PUMP_SPEED",
+          "axis": "secondary",
+          "color": "#ff7f0e",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "b8357335ad684469b00901fefedad39a"
+        },
+        {
+          "y_column": "FUEL_PUMP_CV",
+          "axis": "primary",
+          "color": "#2ca02c",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "675e21ef85e54005882b7f9c51627edd"
+        }
+      ],
+      "id": "53746093ca904badb383c0ef00ff3efc"
+    },
+    {
+      "row": 2,
+      "col": 0,
+      "x_column": "timestamp",
+      "x_label": "timestamp [sec]",
+      "y_label_left": "CAS [m/s]",
+      "y_label_right": "",
+      "show_legend": true,
+      "series": [
+        {
+          "y_column": "Sens_CAS",
+          "axis": "primary",
+          "color": "#1f77b4",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "20e7bcc6a0d24e1baa325055941b2d70"
+        }
+      ],
+      "id": "8598ebc33c894185a6b20c9454975325"
+    },
+    {
+      "row": 2,
+      "col": 1,
+      "x_column": "timestamp",
+      "x_label": "",
+      "y_label_left": "Flowrate [kg/min]",
+      "y_label_right": "Engine RPM",
+      "show_legend": true,
+      "series": [
+        {
+          "y_column": "Engine_RPM",
+          "axis": "secondary",
+          "color": "#1f77b4",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "77452dbc1e3947949faa902b58894bc4"
+        },
+        {
+          "y_column": "FLOWMETER_FLOW_RATE",
+          "axis": "primary",
+          "color": "#ff7f0e",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "03cc2d216dea45f0aab11a9cb777f291"
+        }
+      ],
+      "id": "eee2f59710b440838fe612d6e15ec859"
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "x_column": "timestamp",
+      "x_label": "timestamp [sec]",
+      "y_label_left": "Altitude [m]",
+      "y_label_right": "",
+      "show_legend": true,
+      "series": [
+        {
+          "y_column": "Sens_baro_alt",
+          "axis": "primary",
+          "color": "#1f77b4",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "65921de3aded4f789c290264d253bbe1"
+        },
+        {
+          "y_column": "EGI_TX.PosAlt",
+          "axis": "primary",
+          "color": "#ff7f0e",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "bf192b95394c4d1393f01852b1edfe67"
+        },
+        {
+          "y_column": "EGI_TX.GnssAlt",
+          "axis": "primary",
+          "color": "#2ca02c",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "ec0fc99bc3bf4f7c9ce881162e56ca93"
+        },
+        {
+          "y_column": "ADS_TX.PRESSURE_ALTITUDE",
+          "axis": "primary",
+          "color": "#d62728",
+          "line_style": "solid",
+          "marker": null,
+          "width": 1.5,
+          "id": "9ce67d4d5f69473c9019f3eb64d75cf2"
+        }
+      ],
+      "id": "19581c523db2451dadbd9e92d8b8bd2c"
+    },
+    {
+      "row": 3,
+      "col": 1,
+      "x_column": "timestamp",
+      "x_label": "",
+      "y_label_left": "",
+      "y_label_right": "",
+      "show_legend": true,
+      "series": [],
+      "id": "52c4cdaddfe047ae9eb84ceed384d6a0"
+    }
+  ],
+  "link_x_axes": true
+}
