@@ -47,3 +47,36 @@ def test_plot_grid_widget_rebuild_changes_dimensions(qtbot):
     for r in range(2):
         for c in range(2):
             assert widget.get_view(r, c) is not None
+
+
+def test_subplot_view_teardown_removes_right_vb_from_scene(qtbot):
+    widget = PlotGridWidget()
+    qtbot.addWidget(widget)
+    view = widget.get_view(0, 0)
+
+    series = Series(y_column="a", color="#1f77b4", line_style="solid", width=1.5, axis="secondary")
+    view.set_series_data(series, np.array([0.0, 1.0]), np.array([1.0, 2.0]))
+    assert view.right_vb.scene() is not None
+
+    view.teardown()
+
+    assert view.right_vb.scene() is None
+
+
+def test_plot_grid_widget_rebuild_clears_previous_secondary_viewboxes(qtbot):
+    """Regression test for the "잔상"/ghost-trace bug: a secondary-axis
+    ViewBox is added directly to the scene (see SubplotView.__init__) rather
+    than parented under its PlotItem, so a naive rebuild -- which only
+    removes PlotItems from the scene -- used to leave it (and any curves
+    still attached to it) behind permanently, stranded but still rendered.
+    """
+    widget = PlotGridWidget()
+    qtbot.addWidget(widget)
+    view = widget.get_view(0, 0)
+    series = Series(y_column="a", color="#1f77b4", line_style="solid", width=1.5, axis="secondary")
+    view.set_series_data(series, np.array([0.0, 1.0]), np.array([1.0, 2.0]))
+    stale_right_vb = view.right_vb
+
+    widget.rebuild(2, 2)
+
+    assert stale_right_vb.scene() is None

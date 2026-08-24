@@ -259,6 +259,20 @@ class SubplotView:
         for series_id in list(self._curves.keys()):
             self.remove_series(series_id)
 
+    def teardown(self) -> None:
+        """Release the secondary ViewBox before this SubplotView is discarded.
+
+        right_vb was added directly to the scene (see __init__) rather than
+        parented under plot_item, so plot_item's own removal from the scene
+        (PlotGridWidget.rebuild -> GraphicsLayout.clear) does not take it or
+        any curves still attached to it along -- without this, they leak as
+        a permanent ghost/afterimage on the next grid rebuild.
+        """
+        self.plot_item.vb.sigResized.disconnect(self._sync_right_view_geometry)
+        scene = self.plot_item.scene()
+        if scene is not None:
+            scene.removeItem(self.right_vb)
+
     def has_secondary_series(self) -> bool:
         return any(axis == "secondary" for axis in self._curve_axis.values())
 

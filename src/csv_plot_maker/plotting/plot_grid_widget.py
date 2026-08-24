@@ -53,6 +53,8 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
         self.rebuild(1, 1)
 
     def rebuild(self, rows: int, cols: int) -> None:
+        for view in self._views.values():
+            view.teardown()
         self.clear()
         self._views = {}
         for r in range(rows):
