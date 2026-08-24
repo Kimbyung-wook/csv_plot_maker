@@ -19,6 +19,8 @@ polars==1.43.2
     # via csv-plot-maker
 polars-runtime-32==1.43.2
     # via polars
+psutil==7.2.2
+    # via csv-plot-maker
 pyqtgraph==0.14.0
     # via csv-plot-maker
 pyside6==6.11.2
