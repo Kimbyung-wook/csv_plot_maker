@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
+from pyqtgraph.Qt import QtCore
 
 from csv_plot_maker.models.series import Series
 from csv_plot_maker.plotting.style_map import make_pen, symbol_kwargs
@@ -23,6 +24,7 @@ class SubplotView:
         self.plot_item = plot_item
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._curve_axis: dict[str, str] = {}
+        self._foreground = pg.mkColor("k")
         # Grid lines are painted by the axis items (top/bottom/left/right),
         # which are siblings of the ViewBox in the scene tree, not children
         # of it -- and pyqtgraph adds the ViewBox to that shared parent
@@ -42,12 +44,19 @@ class SubplotView:
             # actually read the range at any zoom level or grid size.
             axis.setTickDensity(1.75)
 
-        self.plot_item.addLegend()
+        # pyqtgraph's LegendItem defaults to a 9px margin on all four sides
+        # plus 5px between each entry's color swatch and its text -- fine for
+        # a single large plot, but with many small subplots stacked in a
+        # grid the legend box ends up disproportionately large next to the
+        # data it's labeling. Tighten both.
+        self.plot_item.addLegend(horSpacing=3, verSpacing=0)
+        legend = self.plot_item.legend
+        legend.layout.setContentsMargins(4, 4, 4, 4)
         # Within the ViewBox's own children, later-added items stack on top
         # -- and curves get added after the legend -- so without this the
         # legend's box can still be drawn over by a curve line passing
         # underneath it. Keep the legend above everything else in the plot.
-        self.plot_item.legend.setZValue(1000)
+        legend.setZValue(1000)
         self.plot_item.showGrid(x=True, y=True, alpha=0.25)
 
         self.right_vb = pg.ViewBox()
@@ -131,6 +140,12 @@ class SubplotView:
         # label, changing the X column...) would force the right axis back
         # on regardless of whether any series actually uses it.
         self.plot_item.setLabel("right", y_label_right)
+        # Same reasoning as the left axis just above: the right axis's width
+        # is also pinned to a fixed constant whenever any subplot in the grid
+        # uses a secondary axis (see PlotGridWidget._sync_right_axis_widths),
+        # so typing a title in doesn't change its geometry either and Qt's
+        # resizeEvent won't fire on its own to recenter it.
+        self._recenter_right_axis_label()
         self._update_right_axis_visibility()
 
     def _recenter_left_axis_label(self) -> None:
@@ -145,9 +160,70 @@ class SubplotView:
         br = axis.label.boundingRect()
         axis.label.setPos(-5, axis.size().height() / 2 + br.width() / 2)
 
+    def _recenter_right_axis_label(self) -> None:
+        # Mirrors AxisItem.resizeEvent()'s own centering formula for a
+        # "right"-orientation label -- see _recenter_left_axis_label for why
+        # resizeEvent() itself isn't called directly.
+        axis = self.plot_item.getAxis("right")
+        if axis.label is None:
+            return
+        br = axis.label.boundingRect()
+        axis.label.setPos(axis.size().width() - br.height() + 5, axis.size().height() / 2 + br.width() / 2)
+
     def set_legend_visible(self, visible: bool) -> None:
         if self.plot_item.legend is not None:
             self.plot_item.legend.setVisible(visible)
+
+    def set_legend_font_size(self, size_pt: int) -> None:
+        legend = self.plot_item.legend
+        if legend is None:
+            return
+        legend.setLabelTextSize(f"{size_pt}pt")
+        # LegendItem.setLabelTextSize() only updates each label's stored opts
+        # -- like setLabelTextColor() (see apply_theme), it never re-renders
+        # the QGraphicsTextItem's cached HTML on its own.
+        for _sample, label in legend.items:
+            label.setText(label.text)
+        self._resize_legend_to_fit(legend)
+
+    @staticmethod
+    def _resize_legend_to_fit(legend: pg.LegendItem) -> None:
+        """Recompute the legend box's own outer size from its current
+        content, replacing pyqtgraph's own LegendItem.updateSize().
+
+        updateSize() sums each entry's *current* item.width()/height() but
+        never adds the layout's own contentsMargins into the outer size it
+        sets -- harmless with pyqtgraph's zero-ish default margins, but once
+        a real margin is set (see __init__) it makes the box a few pixels
+        too small for its own padding. Since each entry's size policy lets
+        it stretch to fill whatever room activate() gives it, the next
+        resize measures those now-compressed items and shrinks the box
+        again -- a self-reinforcing loop that made repeatedly picking the
+        same (e.g. "Small") legend font size keep shrinking the box further
+        each time instead of settling. Reading each item's own
+        `effectiveSizeHint(PreferredSize)` -- which reflects the text's true
+        natural size regardless of whatever the box's current geometry
+        happens to be -- and adding the margins back in makes this
+        idempotent: repeating the same font size always converges to the
+        same size in one pass.
+        """
+        layout = legend.layout
+        left, top, right, bottom = layout.getContentsMargins()
+        width = 0.0
+        height = 0.0
+        for row in range(layout.rowCount()):
+            row_height = 0.0
+            col_width = 0.0
+            for col in range(layout.columnCount()):
+                item = layout.itemAt(row, col)
+                if item is None:
+                    continue
+                hint = item.effectiveSizeHint(QtCore.Qt.SizeHint.PreferredSize, QtCore.QSizeF())
+                col_width += hint.width() + 3
+                row_height = max(row_height, hint.height())
+            width = max(width, col_width)
+            height += row_height
+        legend.setGeometry(0, 0, width + left + right, height + top + bottom)
 
     def apply_theme(self, background, foreground) -> None:
         """Recolor axis lines/ticks/labels and the legend for a theme switch.
@@ -157,10 +233,12 @@ class SubplotView:
         of pyqtgraph's default fully-transparent one, so grid lines and
         curves never show through underneath the legend text.
         """
-        for name in ("bottom", "left", "right"):
+        self._foreground = pg.mkColor(foreground)
+        for name in ("bottom", "left"):
             axis = self.plot_item.getAxis(name)
             axis.setPen(foreground)
             axis.setTextPen(foreground)
+        self._update_right_axis_visibility()
 
         legend = self.plot_item.legend
         if legend is not None:
@@ -181,18 +259,33 @@ class SubplotView:
         for series_id in list(self._curves.keys()):
             self.remove_series(series_id)
 
+    def has_secondary_series(self) -> bool:
+        return any(axis == "secondary" for axis in self._curve_axis.values())
+
     def _update_right_axis_visibility(self) -> None:
-        has_secondary = any(axis == "secondary" for axis in self._curve_axis.values())
+        has_secondary = self.has_secondary_series()
         axis_item = self.plot_item.getAxis("right")
+        # Kept permanently shown (never axis_item.hide()) rather than toggled:
+        # AxisItem forces its own width to 0 whenever isVisible() is False,
+        # regardless of any fixedWidth pinned onto it, which would zero out
+        # the reserved space PlotGridWidget._sync_right_axis_widths() pins
+        # here to keep every subplot's column the same width even when only
+        # one subplot in the grid actually uses a secondary axis. When unused,
+        # blank it out instead -- fully transparent pen, no tick values, no
+        # label, no grid -- so nothing actually renders even though the
+        # layout still reserves its width.
+        axis_item.show()
         if has_secondary:
-            axis_item.show()
+            axis_item.setStyle(showValues=True)
+            axis_item.setPen(self._foreground)
+            axis_item.setTextPen(self._foreground)
             axis_item.setGrid(self.plot_item.ctrl.gridAlphaSlider.value())
         else:
-            axis_item.hide()
-            # A hidden axis doesn't paint on its own, but explicitly zeroing
-            # its grid too means a subplot with no secondary-axis series
-            # never has stray right-axis ticks/gridlines, even across a
-            # theme change or a state reload that touches this axis again.
+            transparent = pg.mkColor(0, 0, 0, 0)
+            axis_item.setStyle(showValues=False)
+            axis_item.setPen(transparent)
+            axis_item.setTextPen(transparent)
+            axis_item.showLabel(False)
             axis_item.setGrid(False)
 
     @staticmethod

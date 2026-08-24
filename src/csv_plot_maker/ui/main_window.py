@@ -107,6 +107,16 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _checked=False, m=mode: self._apply_theme(m))
             theme_group.addAction(action)
 
+        legend_font_menu = settings_menu.addMenu("Legend Font Size")
+        legend_font_group = QActionGroup(self)
+        legend_font_group.setExclusive(True)
+        for label, size_pt in (("Small", 7), ("Medium", 9), ("Large", 11)):
+            action = legend_font_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(size_pt == 9)
+            action.triggered.connect(lambda _checked=False, p=size_pt: self.plot_grid.set_legend_font_size(p))
+            legend_font_group.addAction(action)
+
         info_menu = self.menuBar().addMenu("Info")
         license_action = info_menu.addAction("License Info")
         license_action.triggered.connect(self._on_show_license_info)
@@ -200,6 +210,7 @@ class MainWindow(QMainWindow):
         view.remove_series(series_id)
         if not subplot.series:
             view.set_legend_visible(False)
+        self.plot_grid.schedule_axis_width_sync()
         self._refresh_series_list()
 
     def _clear_subplot(self, subplot: SubplotConfig) -> None:
@@ -415,6 +426,12 @@ class MainWindow(QMainWindow):
         x_data = self.column_store.get(subplot.x_column)
         y_data = self.column_store.get(series.y_column)
         self._active_view().set_series_data(series, x_data, y_data)
+        # Reassigning a series to/from the secondary axis changes whether this
+        # subplot's right axis needs its shared reserved width (see
+        # PlotGridWidget._sync_right_axis_widths) -- without this, the other
+        # subplots' columns wouldn't pick up the new width until some later
+        # unrelated replot.
+        self.plot_grid.schedule_axis_width_sync()
         self._refresh_series_list()
         self.series_panel.select_series_id(series.id)
 
