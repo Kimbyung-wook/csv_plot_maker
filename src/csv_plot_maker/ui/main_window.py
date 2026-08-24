@@ -270,7 +270,11 @@ class MainWindow(QMainWindow):
         # now-correct reference range.
         self._autorange_all_views()
 
-        message = f"{store.row_count:,} rows loaded from {store.source_path} in {store.load_time_ms:.0f} ms"
+        data_mb = store.total_nbytes() / (1024 * 1024)
+        message = (
+            f"{store.row_count:,} rows loaded from {store.source_path} "
+            f"in {store.load_time_ms:.0f} ms ({data_mb:,.0f} MB in memory)"
+        )
         if loaded_saved_layout:
             message += f" -- restored layout from {config_path.name}"
         self.statusBar().showMessage(message)

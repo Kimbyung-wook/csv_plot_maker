@@ -266,7 +266,10 @@ class CsvPanel(QWidget):
             return
         if self._progress is not None:
             self._progress.hide()
-        self.status_label.setText(f"Loaded {store.row_count:,} rows in {store.load_time_ms:.0f} ms")
+        data_mb = store.total_nbytes() / (1024 * 1024)
+        self.status_label.setText(
+            f"Loaded {store.row_count:,} rows in {store.load_time_ms:.0f} ms ({data_mb:,.0f} MB in memory)"
+        )
         self.csv_loaded.emit(store)
 
     def _on_load_error(self, generation: int, message: str) -> None:

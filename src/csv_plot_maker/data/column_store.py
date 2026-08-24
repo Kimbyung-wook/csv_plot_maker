@@ -27,3 +27,7 @@ class ColumnStore:
 
     def is_empty(self) -> bool:
         return not self.columns
+
+    def total_nbytes(self) -> int:
+        """Sum of every stored column array's memory footprint, in bytes."""
+        return sum(arr.nbytes for arr in self.columns.values())

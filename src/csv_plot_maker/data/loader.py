@@ -7,6 +7,52 @@ import polars as pl
 
 from csv_plot_maker.data.column_store import ColumnStore
 
+# Round-trip tolerance for deciding whether a float64 column can be stored as
+# float32 (halving its memory footprint) without a plot-visible precision
+# loss. Ordinary sensor-style decimal values (rtol looser than float32's own
+# ~1.19e-7 machine epsilon, so smoothly-varying readings always pass) are
+# fine to downcast; atol guards near-zero values.
+_FLOAT32_DOWNCAST_RTOL = 1e-6
+_FLOAT32_DOWNCAST_ATOL = 1e-9
+
+# float32 can only represent integers exactly up to 2**24 (16,777,216) --
+# beyond that, distinct large values (e.g. a big counter or a raw timestamp
+# stored as a float column) can collapse onto the same float32 value even
+# though the *relative* rounding error stays tiny. Magnitude check first, so
+# these columns are rejected outright regardless of the round-trip result.
+_FLOAT32_SAFE_MAGNITUDE = 2**24
+
+
+def _downcast_to_float32_if_safe(arr: np.ndarray) -> np.ndarray:
+    """Return `arr` as float32 if that's safe (bounded magnitude + round-trips within tolerance), else float64 unchanged."""
+    finite = arr[np.isfinite(arr)]
+    if finite.size and np.max(np.abs(finite)) >= _FLOAT32_SAFE_MAGNITUDE:
+        return arr
+    candidate = arr.astype(np.float32)
+    if np.allclose(arr, candidate, rtol=_FLOAT32_DOWNCAST_RTOL, atol=_FLOAT32_DOWNCAST_ATOL, equal_nan=True):
+        return candidate
+    return arr
+
+
+# polars' CSV schema inference always widens whole-number columns to Int64
+# regardless of their actual value range (a column of 0/1 flags gets the same
+# 8 bytes/value as a column of huge counters), so this is worth narrowing
+# unconditionally -- unlike the float32 case there's no precision trade-off,
+# just picking the smallest dtype that can hold the column's real min/max.
+_INT_WIDTHS = (np.int8, np.int16, np.int32, np.int64)
+
+
+def _narrow_integer_width(arr: np.ndarray) -> np.ndarray:
+    """Return `arr` cast down to the smallest signed integer dtype that fits its actual min/max."""
+    if arr.size == 0:
+        return arr
+    lo, hi = int(arr.min()), int(arr.max())
+    for dtype in _INT_WIDTHS:
+        info = np.iinfo(dtype)
+        if info.min <= lo and hi <= info.max:
+            return arr.astype(dtype) if arr.dtype != dtype else arr
+    return arr
+
 
 def peek_schema(path: str) -> list[str]:
     """Return column names near-instantly, without parsing the full file."""
@@ -42,16 +88,27 @@ def load_csv(path: str) -> ColumnStore:
     failures) -- not on `MemoryError` or anything else unexpected, so a load
     that's already run out of memory on the fast path doesn't get retried
     with two more, progressively more expensive full-file re-parses.
+
+    n_threads=1: polars' default (one worker per CPU core) splits very wide
+    files into hundreds of small chunks per column during parsing, and that
+    fragmentation isn't released even after the load finishes (rechunk=True
+    doesn't help either -- measured on a 1003-column fixture: peak RSS was
+    ~10x the file's on-disk size with default threading vs ~6x pinned to a
+    single thread, with no measurable load-time cost on the files tested).
     """
     start = time.perf_counter()
     try:
-        df = pl.read_csv(path, try_parse_dates=True)
+        df = pl.read_csv(path, try_parse_dates=True, n_threads=1)
     except pl.exceptions.PolarsError:
         try:
-            df = pl.read_csv(path, try_parse_dates=True, infer_schema_length=None)
+            df = pl.read_csv(path, try_parse_dates=True, infer_schema_length=None, n_threads=1)
         except pl.exceptions.PolarsError:
             df = pl.read_csv(
-                path, try_parse_dates=True, infer_schema_length=None, ignore_errors=True
+                path,
+                try_parse_dates=True,
+                infer_schema_length=None,
+                ignore_errors=True,
+                n_threads=1,
             )
     store = ColumnStore(source_path=path, row_count=df.height)
 
@@ -85,10 +142,20 @@ def load_csv(path: str) -> ColumnStore:
         # numpy dict are both fully resident in memory at the same time).
         column = df.drop_in_place(name)
         if is_numeric:
-            store.columns[name] = column.to_numpy()
+            arr = column.to_numpy()
+            # Branch on the array's actual resulting dtype rather than the
+            # source polars dtype: a nullable Int64 column comes back from
+            # to_numpy() as float64 (nulls become NaN), and that column
+            # needs the float32 downcast path, not the integer one.
+            if arr.dtype == np.float64:
+                arr = _downcast_to_float32_if_safe(arr)
+            elif np.issubdtype(arr.dtype, np.integer):
+                arr = _narrow_integer_width(arr)
+            store.columns[name] = arr
         else:
             # Physical (integer) representation converts cleanly to a plottable numeric axis.
             store.columns[name] = column.to_physical().to_numpy().astype(np.float64)
 
+    del df
     store.load_time_ms = (time.perf_counter() - start) * 1000
     return store
