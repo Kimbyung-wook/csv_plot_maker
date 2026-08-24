@@ -7,3 +7,7 @@ build/
 dist/
 *.csv
 !tests/fixtures/*.csv
+tests/test_theme.py
+CSV Plot Maker.spec
+tests/fixtures/small.csv
+.claude/
