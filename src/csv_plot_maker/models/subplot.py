@@ -13,6 +13,7 @@ class SubplotConfig:
     row: int
     col: int
     x_column: str | None = None
+    x_offset: float = 0.0
     x_label: str = ""
     y_label_left: str = ""
     y_label_right: str = ""

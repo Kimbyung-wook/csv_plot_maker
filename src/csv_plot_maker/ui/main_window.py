@@ -69,6 +69,9 @@ class MainWindow(QMainWindow):
         self.grid_panel.clear_all_requested.connect(self._on_clear_all_requested)
         self.grid_panel.link_x_toggled.connect(self._on_link_x_toggled)
         self.series_panel.x_column_changed.connect(self._on_x_column_changed)
+        self.series_panel.x_offset_changed.connect(self._on_x_offset_changed)
+        self.series_panel.zero_at_start_requested.connect(self._on_zero_at_start_requested)
+        self.series_panel.apply_x_to_all_requested.connect(self._on_apply_x_to_all_requested)
         self.series_panel.series_selection_changed.connect(self._on_series_selection_changed)
         self.series_panel.series_delete_requested.connect(self._on_series_delete_requested)
         self.series_panel.legend_toggled.connect(self._on_legend_toggled)
@@ -161,14 +164,18 @@ class MainWindow(QMainWindow):
     def _refresh_active_subplot_controls(self) -> None:
         subplot = self._active_subplot()
         self.series_panel.set_x_column(subplot.x_column)
+        self.series_panel.set_x_offset(subplot.x_offset)
         self.series_panel.set_show_legend(subplot.show_legend)
         self._refresh_series_list()
+
+    def _x_data(self, subplot: SubplotConfig) -> np.ndarray:
+        return self.column_store.get(subplot.x_column) + subplot.x_offset
 
     def _replot_subplot(self, subplot: SubplotConfig) -> None:
         if self.column_store is None or not subplot.x_column:
             return
         view = self.plot_grid.get_view(subplot.row, subplot.col)
-        x_data = self.column_store.get(subplot.x_column)
+        x_data = self._x_data(subplot)
         for series in subplot.series:
             y_data = self.column_store.get(series.y_column)
             view.set_series_data(series, x_data, y_data)
@@ -300,7 +307,7 @@ class MainWindow(QMainWindow):
             if not subplot.series or not subplot.x_column:
                 continue
             view = self.plot_grid.get_view(subplot.row, subplot.col)
-            x_data = self.column_store.get(subplot.x_column)
+            x_data = self._x_data(subplot)
             x_min, x_max = float(np.nanmin(x_data)), float(np.nanmax(x_data))
             y_min = min(float(np.nanmin(self.column_store.get(s.y_column))) for s in subplot.series)
             y_max = max(float(np.nanmax(self.column_store.get(s.y_column))) for s in subplot.series)
@@ -376,6 +383,30 @@ class MainWindow(QMainWindow):
         subplot.x_column = name
         self._replot_subplot(subplot)
 
+    def _on_x_offset_changed(self, value: float) -> None:
+        subplot = self._active_subplot()
+        subplot.x_offset = value
+        self._replot_subplot(subplot)
+
+    def _on_zero_at_start_requested(self) -> None:
+        subplot = self._active_subplot()
+        if self.column_store is None or not subplot.x_column:
+            return
+        raw_x = self.column_store.get(subplot.x_column)
+        subplot.x_offset = -float(np.nanmin(raw_x))
+        self.series_panel.set_x_offset(subplot.x_offset)
+        self._replot_subplot(subplot)
+
+    def _on_apply_x_to_all_requested(self) -> None:
+        subplot = self._active_subplot()
+        if not subplot.x_column:
+            return
+        for sp in self.project.subplots:
+            sp.x_column = subplot.x_column
+            sp.x_offset = subplot.x_offset
+        self._replot_all_subplots()
+        self._autorange_all_views()
+
     def _on_column_dropped(self, row: int, col: int, column_name: str) -> None:
         if self.column_store is None:
             self.statusBar().showMessage("Still loading the CSV -- please wait before adding series")
@@ -388,7 +419,21 @@ class MainWindow(QMainWindow):
 
         self._set_active_subplot(subplot.id)
         color = next_default_color(len(subplot.series))
-        series = Series(y_column=column_name, color=color)
+        # A mostly-empty column (e.g. a rarely-updated periodic "echo" field)
+        # has its few real samples too far apart for a plain connecting line
+        # to ever draw between two of them -- default it to marker-only so
+        # it's visible immediately instead of looking like nothing was added.
+        # A connecting line would also be misleading here even on the rare
+        # occasion two real samples do land on adjacent rows: it implies a
+        # smooth transition between two far-apart timestamps that isn't
+        # actually in the data.
+        sparse = self.column_store.is_sparse(column_name)
+        series = Series(
+            y_column=column_name,
+            color=color,
+            marker="dot" if sparse else None,
+            line_style="none" if sparse else "solid",
+        )
         subplot.add_series(series)
         self._refresh_active_subplot_controls()
         self._replot_subplot(subplot)
@@ -427,7 +472,7 @@ class MainWindow(QMainWindow):
         if series is None or series.axis == axis:
             return
         series.axis = axis
-        x_data = self.column_store.get(subplot.x_column)
+        x_data = self._x_data(subplot)
         y_data = self.column_store.get(series.y_column)
         self._active_view().set_series_data(series, x_data, y_data)
         # Reassigning a series to/from the secondary axis changes whether this

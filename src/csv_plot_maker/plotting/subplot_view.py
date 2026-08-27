@@ -98,7 +98,7 @@ class SubplotView:
             # resolves to, and during addItem() the item briefly resolves to the
             # enclosing GraphicsView (no autoRangeEnabled) before its ViewBox parent
             # is attached -- enabling clipToView beforehand crashes on that transient state.
-            curve.setDownsampling(auto=True, method="peak")
+            self._apply_downsampling(curve, series)
             curve.setClipToView(True)
             self._curves[series.id] = curve
             self._curve_axis[series.id] = series.axis
@@ -310,3 +310,19 @@ class SubplotView:
         curve.setSymbolBrush(sym["symbolBrush"])
         curve.setSymbolPen(sym["symbolPen"])
         curve.setSymbolSize(sym["symbolSize"])
+        SubplotView._apply_downsampling(curve, series)
+
+    @staticmethod
+    def _apply_downsampling(curve: pg.PlotDataItem, series: Series) -> None:
+        # pyqtgraph's "peak" downsampling reduces each bin of `ds` raw
+        # samples to a plain min()/max() pair -- which, like numpy, propagates
+        # NaN: a bin that mixes real values with the NaN gaps typical of a
+        # sparse/rarely-updated field (the whole point of turning a marker on
+        # -- to see individual discrete samples) collapses to NaN and draws
+        # nothing at all. That only happens once zoomed out far enough for a
+        # bin to span both a real value and its gaps, so the symptom is
+        # exactly "invisible until zoomed in enough". A marker is the user's
+        # explicit "show me every point" signal, so downsampling is switched
+        # off whenever one is set; dense continuous series without a marker
+        # keep the performance benefit.
+        curve.setDownsampling(auto=not series.marker, method="peak")

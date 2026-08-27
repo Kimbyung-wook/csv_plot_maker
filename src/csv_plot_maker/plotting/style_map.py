@@ -26,6 +26,7 @@ _QT_LINE_STYLES = {
 
 MARKER_CHOICES = {
     "None": None,
+    "Dot": "dot",
     "Circle": "o",
     "Square": "s",
     "Triangle": "t",
@@ -33,6 +34,13 @@ MARKER_CHOICES = {
     "Plus": "+",
     "Cross": "x",
 }
+
+# pyqtgraph has no dedicated "small dot" symbol distinct from a regular
+# circle -- "Dot" reuses the circle glyph ('o') but always renders at this
+# small, fixed size regardless of line width, so it reads as a lightweight
+# point marker rather than the bigger, width-scaled "Circle" option.
+_DOT_PYQTGRAPH_SYMBOL = "o"
+_DOT_SYMBOL_SIZE = 4
 
 
 def next_default_color(index: int) -> str:
@@ -46,9 +54,10 @@ def make_pen(series: Series) -> pg.QtGui.QPen:
 def symbol_kwargs(series: Series) -> dict:
     if not series.marker:
         return {"symbol": None, "symbolBrush": None, "symbolPen": None, "symbolSize": 0}
+    is_dot = series.marker == "dot"
     return {
-        "symbol": series.marker,
+        "symbol": _DOT_PYQTGRAPH_SYMBOL if is_dot else series.marker,
         "symbolBrush": series.color,
         "symbolPen": None,  # no marker outline
-        "symbolSize": max(series.width * 3, 6),
+        "symbolSize": _DOT_SYMBOL_SIZE if is_dot else max(series.width * 3, 6),
     }

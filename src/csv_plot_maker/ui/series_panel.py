@@ -4,9 +4,12 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +42,9 @@ class SeriesPanel(QWidget):
     """
 
     x_column_changed = Signal(str)
+    x_offset_changed = Signal(float)
+    zero_at_start_requested = Signal()
+    apply_x_to_all_requested = Signal()
     series_selection_changed = Signal(str)  # series id, "" when nothing selected
     series_delete_requested = Signal(str)  # series id
     legend_toggled = Signal(bool)
@@ -47,19 +53,34 @@ class SeriesPanel(QWidget):
         super().__init__(parent)
 
         self.x_combo = QComboBox()
+        self.x_offset_spin = QDoubleSpinBox()
+        self.x_offset_spin.setRange(-1e12, 1e12)
+        self.x_offset_spin.setDecimals(3)
+        self.zero_at_start_button = QPushButton("Zero at start")
+        self.apply_x_to_all_button = QPushButton("Apply X Column && Offset to All Subplots")
         self.series_list = SeriesListWidget()
         self.legend_checkbox = QCheckBox("Show Legend")
         self.legend_checkbox.setChecked(True)
 
+        offset_layout = QHBoxLayout()
+        offset_layout.addWidget(QLabel("X offset:"))
+        offset_layout.addWidget(self.x_offset_spin, 1)
+        offset_layout.addWidget(self.zero_at_start_button)
+
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("X column:"))
         layout.addWidget(self.x_combo)
+        layout.addLayout(offset_layout)
+        layout.addWidget(self.apply_x_to_all_button)
         layout.addWidget(self.legend_checkbox)
 
         layout.addWidget(QLabel("Y series in this subplot:"))
         layout.addWidget(self.series_list, 1)
 
         self.x_combo.currentTextChanged.connect(self._on_x_changed)
+        self.x_offset_spin.valueChanged.connect(self.x_offset_changed)
+        self.zero_at_start_button.clicked.connect(self.zero_at_start_requested)
+        self.apply_x_to_all_button.clicked.connect(self.apply_x_to_all_requested)
         self.series_list.currentItemChanged.connect(self._on_selection_changed)
         self.series_list.delete_requested.connect(self._on_delete_requested)
         self.legend_checkbox.toggled.connect(self.legend_toggled)
@@ -78,6 +99,11 @@ class SeriesPanel(QWidget):
             self.x_combo.blockSignals(True)
             self.x_combo.setCurrentText(name)
             self.x_combo.blockSignals(False)
+
+    def set_x_offset(self, value: float) -> None:
+        self.x_offset_spin.blockSignals(True)
+        self.x_offset_spin.setValue(value)
+        self.x_offset_spin.blockSignals(False)
 
     def set_show_legend(self, visible: bool) -> None:
         self.legend_checkbox.blockSignals(True)

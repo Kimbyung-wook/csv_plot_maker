@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 
 from csv_plot_maker.data.column_store import ColumnStore
+from csv_plot_maker.data.header_trim import trim_headers
 
 # Round-trip tolerance for deciding whether a float64 column can be stored as
 # float32 (halving its memory footprint) without a plot-visible precision
@@ -54,13 +55,16 @@ def _narrow_integer_width(arr: np.ndarray) -> np.ndarray:
     return arr
 
 
-def peek_schema(path: str) -> list[str]:
+def peek_schema(path: str, header_trim_keywords: list[str] | None = None) -> list[str]:
     """Return column names near-instantly, without parsing the full file."""
     schema = pl.scan_csv(path).collect_schema()
-    return ["Sequential"] + list(schema.names())
+    names = list(schema.names())
+    if header_trim_keywords:
+        names = trim_headers(names, header_trim_keywords)
+    return ["Sequential"] + names
 
 
-def load_csv(path: str) -> ColumnStore:
+def load_csv(path: str, header_trim_keywords: list[str] | None = None) -> ColumnStore:
     """Fully parse a CSV (multithreaded) and convert columns to numpy arrays.
 
     Runs on a worker thread (see utils.workers.CallableWorker) so the UI
@@ -110,6 +114,8 @@ def load_csv(path: str) -> ColumnStore:
                 ignore_errors=True,
                 n_threads=1,
             )
+    if header_trim_keywords:
+        df.columns = trim_headers(df.columns, header_trim_keywords)
     store = ColumnStore(source_path=path, row_count=df.height)
 
     store.columns["Sequential"] = np.arange(1, df.height + 1, dtype=np.float64)
@@ -118,21 +124,58 @@ def load_csv(path: str) -> ColumnStore:
 
     for name, dtype in zip(df.columns, df.dtypes):
         is_numeric = dtype.is_numeric()
-        is_temporal = dtype in (pl.Date, pl.Datetime)
+        is_temporal = dtype in (pl.Date, pl.Datetime, pl.Time)
         store.dtypes[name] = str(dtype)
         store.numeric[name] = is_numeric or is_temporal
 
         if not (is_numeric or is_temporal):
+            column = df.drop_in_place(name)
+            if dtype == pl.String:
+                if column.null_count() == df.height:
+                    # A column whose trailing field is omitted on every
+                    # single row (ragged CSV rows -- no data past this point
+                    # rather than an explicit empty field) can't have its
+                    # dtype inferred at all and comes back as String,
+                    # all-null. It's still meant to be a numeric column, just
+                    # entirely empty in this file, so keep it plottable
+                    # (all-NaN) instead of dropping it like a genuine
+                    # non-numeric column (e.g. a text "label" column).
+                    store.numeric[name] = True
+                    store.columns[name] = np.full(df.height, np.nan, dtype=np.float64)
+                    continue
+                # A column can also land on String while genuinely holding
+                # numeric text: if this column is null across almost the
+                # entire sampled inference window (e.g. a rarely-updated
+                # periodic "echo" field), polars can't guess a numeric dtype
+                # from nothing and defaults the column to String -- then
+                # happily parses the real numbers that do show up later in
+                # the file as their string form, without ever raising the
+                # schema error the retry ladder above is watching for. Try to
+                # recover the real dtype now that every value is in hand:
+                # a strict cast succeeds only if every non-null value
+                # actually parses as that type, so a genuine text column
+                # (e.g. "label") correctly fails both and falls through to
+                # being dropped below.
+                for numeric_dtype in (pl.Int64, pl.Float64):
+                    try:
+                        numeric_column = column.cast(numeric_dtype, strict=True)
+                    except pl.exceptions.PolarsError:
+                        continue
+                    store.numeric[name] = True
+                    arr = numeric_column.to_numpy()
+                    if arr.dtype == np.float64:
+                        arr = _downcast_to_float32_if_safe(arr)
+                    elif np.issubdtype(arr.dtype, np.integer):
+                        arr = _narrow_integer_width(arr)
+                    store.columns[name] = arr
+                    break
             # Non-numeric columns can never be plotted -- every column-
             # selection path in the UI gates on ColumnStore.numeric_column_
             # names(), which this dtype flag alone already satisfies. Convert
             # nothing for them: a numpy object-array of Python str objects is
             # typically far larger in memory than the column's raw CSV bytes,
             # so materializing it would be pure waste for data that's never
-            # actually used. drop_in_place (instead of just leaving it in df)
-            # also releases polars' own memory for it immediately rather than
-            # holding it for the rest of this loop.
-            df.drop_in_place(name)
+            # actually used.
             continue
 
         # drop_in_place both extracts the column and removes it from df, so
@@ -153,8 +196,14 @@ def load_csv(path: str) -> ColumnStore:
                 arr = _narrow_integer_width(arr)
             store.columns[name] = arr
         else:
-            # Physical (integer) representation converts cleanly to a plottable numeric axis.
-            store.columns[name] = column.to_physical().to_numpy().astype(np.float64)
+            # Physical representation converts cleanly to a plottable numeric
+            # axis. pl.Time's physical value is nanoseconds since midnight --
+            # divide down to seconds, the unit users actually want to plot
+            # against; Date/Datetime keep their raw physical value (days /
+            # microseconds since epoch) since nothing has asked for those in
+            # a different unit yet.
+            physical = column.to_physical().to_numpy().astype(np.float64)
+            store.columns[name] = physical / 1e9 if dtype == pl.Time else physical
 
     del df
     store.load_time_ms = (time.perf_counter() - start) * 1000

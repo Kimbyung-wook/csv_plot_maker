@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -22,6 +23,8 @@ from PySide6.QtWidgets import (
 
 from csv_plot_maker.data.column_store import ColumnStore
 from csv_plot_maker.data.loader import load_csv, peek_schema
+from csv_plot_maker.ui.header_trim_dialog import HeaderTrimDialog
+from csv_plot_maker.ui.header_trim_settings import load_default_keywords
 from csv_plot_maker.utils.workers import CallableWorker
 
 # How many times a CSV's on-disk size a full load might need in RAM at peak,
@@ -140,22 +143,38 @@ class CsvPanel(QWidget):
         # this dict entry alive until the load resolves is what keeps them
         # from disappearing out from under the thread pool mid-flight.
         self._pending_loads: dict[int, tuple] = {}
+        # Path of the CSV currently open (or being opened), if any -- lets
+        # the Header Trimming dialog reload it in place when the keyword
+        # list changes, instead of leaving stale (untrimmed) column names on
+        # screen until the user manually reopens the file.
+        self._current_path: str | None = None
+        # This session's active keyword list -- seeded once from the default
+        # file next to the app (if one exists), then only ever changed by
+        # the user explicitly editing/loading it in the Header Trimming
+        # dialog. Never auto-written back to disk; see HeaderTrimDialog.
+        self._header_trim_keywords: list[str] = load_default_keywords()
 
         self.open_button = QPushButton("Open CSV...")
+        self.header_trim_button = QPushButton("Header Trimming")
         self.path_label = QLabel("No file loaded")
         self.path_label.setWordWrap(True)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self.column_list = DraggableColumnList()
 
+        top_row = QHBoxLayout()
+        top_row.addWidget(self.open_button)
+        top_row.addWidget(self.header_trim_button)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(self.open_button)
+        layout.addLayout(top_row)
         layout.addWidget(self.path_label)
         layout.addWidget(QLabel("Columns: (Ctrl+F to search)"))
         layout.addWidget(self.column_list, stretch=1)
         layout.addWidget(self.status_label)
 
         self.open_button.clicked.connect(self._on_open_clicked)
+        self.header_trim_button.clicked.connect(self._on_header_trim_clicked)
 
         search_shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
         search_shortcut.activated.connect(self._open_search_popup)
@@ -171,6 +190,20 @@ class CsvPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Open CSV", "", "CSV Files (*.csv);;All Files (*)")
         if path:
             self.load_path(path)
+
+    def _on_header_trim_clicked(self) -> None:
+        dialog = HeaderTrimDialog(self._header_trim_keywords, self)
+        dialog.exec()
+        new_keywords = dialog.current_keywords()
+        if new_keywords == self._header_trim_keywords:
+            return
+        self._header_trim_keywords = new_keywords
+        if self._current_path is not None:
+            # Re-run the same load with the new keyword list so the already-
+            # open CSV picks up the change immediately, rather than leaving
+            # stale (untrimmed) column names on screen until the user
+            # manually reopens the file.
+            self.load_path(self._current_path)
 
     def _confirm_memory_headroom(self, path: str) -> bool:
         """Warn (with a chance to back out) before a load that looks likely
@@ -207,12 +240,15 @@ class CsvPanel(QWidget):
         return reply == QMessageBox.StandardButton.Yes
 
     def load_path(self, path: str) -> None:
+        self._current_path = path
         self.path_label.setText(path)
         self.status_label.setText("Reading columns...")
         self.column_list.clear()
 
+        header_trim_keywords = self._header_trim_keywords
+
         try:
-            names = peek_schema(path)
+            names = peek_schema(path, header_trim_keywords)
         except Exception as exc:
             self.status_label.setText(f"Failed to read header: {exc}")
             return
@@ -245,7 +281,7 @@ class CsvPanel(QWidget):
         self._progress.show()
 
         self.status_label.setText("Loading data in background...")
-        worker = CallableWorker(lambda: load_csv(path))
+        worker = CallableWorker(lambda: load_csv(path, header_trim_keywords))
 
         def on_finished(store: ColumnStore, g: int = generation) -> None:
             self._on_load_finished(g, store)

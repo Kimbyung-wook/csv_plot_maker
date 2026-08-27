@@ -31,3 +31,17 @@ class ColumnStore:
     def total_nbytes(self) -> int:
         """Sum of every stored column array's memory footprint, in bytes."""
         return sum(arr.nbytes for arr in self.columns.values())
+
+    def is_sparse(self, name: str, threshold: float = 0.5) -> bool:
+        """True if more than `threshold` of the column's values are missing (NaN).
+
+        Used to pick a sensible default series style: a mostly-empty column
+        (e.g. a rarely-updated periodic "echo" status field) has its few real
+        samples scattered far enough apart that a plain connecting line never
+        has two adjacent finite points to draw between -- nothing renders at
+        all unless a marker highlights each point individually.
+        """
+        arr = self.columns[name]
+        if arr.dtype.kind != "f" or arr.size == 0:
+            return False
+        return float(np.isnan(arr).mean()) > threshold

@@ -5,5 +5,5 @@ BUILD_DATE whenever a new standalone executable is built (see scripts in the
 project root / DESIGN.md appendix A for the PyInstaller build command).
 """
 
-__version__ = "0.2.0"
-BUILD_DATE = "2026-08-24"
+__version__ = "0.3.0"
+BUILD_DATE = "2026-08-27"
