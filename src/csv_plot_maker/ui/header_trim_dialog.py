@@ -45,6 +45,7 @@ class HeaderTrimDialog(QDialog):
         self._input.setPlaceholderText("Keyword to strip from headers...")
         add_button = QPushButton("Add")
         remove_button = QPushButton("Remove Selected")
+        remove_all_button = QPushButton("Remove All")
         load_button = QPushButton("Load from File...")
         save_button = QPushButton("Save to File...")
         close_button = QPushButton("Close")
@@ -52,6 +53,10 @@ class HeaderTrimDialog(QDialog):
         input_row = QHBoxLayout()
         input_row.addWidget(self._input, 1)
         input_row.addWidget(add_button)
+
+        remove_row = QHBoxLayout()
+        remove_row.addWidget(remove_button)
+        remove_row.addWidget(remove_all_button)
 
         file_row = QHBoxLayout()
         file_row.addWidget(load_button)
@@ -61,13 +66,14 @@ class HeaderTrimDialog(QDialog):
         layout.addWidget(QLabel("Keywords removed from every column header on load:"))
         layout.addWidget(self._list, 1)
         layout.addLayout(input_row)
-        layout.addWidget(remove_button)
+        layout.addLayout(remove_row)
         layout.addLayout(file_row)
         layout.addWidget(close_button)
 
         self._input.returnPressed.connect(self._on_add)
         add_button.clicked.connect(self._on_add)
         remove_button.clicked.connect(self._on_remove_selected)
+        remove_all_button.clicked.connect(self._on_remove_all)
         load_button.clicked.connect(self._on_load_from_file)
         save_button.clicked.connect(self._on_save_to_file)
         close_button.clicked.connect(self.accept)
@@ -88,6 +94,19 @@ class HeaderTrimDialog(QDialog):
     def _on_remove_selected(self) -> None:
         for item in self._list.selectedItems():
             self._list.takeItem(self._list.row(item))
+
+    def _on_remove_all(self) -> None:
+        if self._list.count() == 0:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Remove all keywords",
+            f"Remove all {self._list.count()} keyword(s)?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._list.clear()
 
     def _on_load_from_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
