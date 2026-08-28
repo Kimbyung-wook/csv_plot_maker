@@ -112,12 +112,19 @@ CSV 데이터를 불러와 다중 subplot 그래프로 시각화하는 데스크
   - *(2026-08-23 확정 — 이전엔 매번 2번부터 시작해 정상 CSV도 느려졌던 것을 1번 우선 시도로 되돌려 정상 케이스의 로딩 속도를 회복)*
 - 다른 CSV 파일을 열면 이전에 열려있던 CSV의 subplot 구성/시리즈는 모두 초기화됨 (컬럼 스키마가 다른 파일 간 충돌 방지). 단, 새로 여는 CSV와 같은 이름의 저장된 레이아웃(JSON)이 있으면 그것을 자동 로드
 - **저사양(RAM 16GB급) 환경에서 4GB 이상 CSV 로드 시 OOM으로 컴퓨터가 멈추는 문제 개선** *(2026-08-25 추가, 부록 C.1 참고)*: 문자열 컬럼을 아예 메모리에 올리지 않고, 로딩 중 polars 쪽 메모리를 즉시 해제하고, 스키마 오류가 아닌 예외(`MemoryError` 등)는 재시도하지 않고, 로딩 시작 전 파일 크기 대비 가용 RAM을 미리 확인해 경고하도록 함
+- **Ragged 행(끝 컬럼 생략) 지원** *(2026-08-27 추가)*: 행 끝의 데이터가 없을 때 trailing comma를 찍지 않는 CSV도 polars가 짧은 행을 null로 우측 패딩해 기본적으로 문제없이 로드됨. 단, 어떤 컬럼이 모든 행에서 예외 없이 비어있으면 dtype을 추론할 수 없어 String(all-null)으로 떨어지는데, 이 경우도 진짜 텍스트 컬럼처럼 버리지 않고 전부 NaN인 숫자 컬럼으로 취급해 그래프 후보 목록에 남김
+- **`HH:MM:SS.fff` 시각 문자열 컬럼을 초 단위로 변환** *(2026-08-27 추가)*: `try_parse_dates=True`가 이런 컬럼을 `pl.Time`으로 정확히 파싱하지만 기존에는 temporal 판정에서 `pl.Time`이 빠져 비수치로 분류되어 버려지고 있었음. `pl.Time`을 temporal로 인정하고, 그 물리적 표현(자정 기준 나노초)을 초 단위로 나눠 저장 — `Date`/`Datetime` 컬럼의 기존 처리 방식(물리적 값 그대로)은 변경하지 않음
+- **드물게 갱신되는(sparse) 숫자 컬럼이 통째로 String으로 오분류되어 사라지는 문제 수정** *(2026-08-27 추가)*: 어떤 컬럼이 polars의 스키마 추론 샘플 구간(파일 앞부분 일부 행)에서 전부 null이면(예: 주기적으로만 갱신되는 "echo" 상태 필드), polars는 숫자 dtype을 추측할 근거가 없어 String으로 확정하고, 그 뒤로 실제 숫자 값이 나와도 문자열 형태로 그냥 파싱해버려 스키마 오류를 내지 않음 — 기존 3단계 폴백은 `PolarsError` 예외 발생을 트리거로 삼기 때문에 이 경우엔 애초에 전체 재스캔(2/3단계)로 넘어갈 기회조차 없이 조용히 String(그래서 그래프에 안 나오는 비수치 컬럼)으로 남았음. 실제 사례: 정상 텔레메트리와 훨씬 낮은 빈도로만 갱신되는 "ECHO" 응답 메시지 필드(예: `..._SYSTEM_MODE_Value`, `..._FLIGHT_CONTROL_MODE_Value`)가 544개 컬럼 중 524개나 이 문제로 통째로 빠짐(`M1-LT-06-02_GCS-AVS_ALL_DATA.csv` 실측). 수정: dtype이 String으로 떨어진(그리고 전부 null은 아닌) 컬럼에 한해 `Int64` → `Float64` 순으로 `cast(strict=True)`를 시도해, 모든 non-null 값이 실제로 그 타입으로 파싱되면 되살리고(진짜 텍스트 컬럼은 두 캐스팅 모두 실패해 기존처럼 정상적으로 드롭됨), 파일을 다시 스캔하지 않고 이미 파싱된 String 컬럼 값 그대로 변환하므로 재파싱 비용이 들지 않음
 
 ### 3.2 시리즈/스타일
 - 시리즈별 색상, 선 스타일(solid/dash/dot/dashdot/**none**), 마커 종류, 선 굵기를 독립적으로 설정
 - "None" 선 스타일 선택 시 선을 그리지 않고 마커만 표시(점만 찍는 산점도 형태)
 - 모든 마커는 테두리(outline) 없이 채움만 표시
 - 스타일 변경은 데이터 재전송 없이 해당 시리즈만 즉시(setPen/setSymbol) 갱신되어 대용량에서도 지연 없음
+- **마커가 켜진 시리즈는 auto-downsampling을 끔** *(2026-08-27 추가)*: pyqtgraph의 `peak` 다운샘플링은 여러 원본 샘플을 픽셀 하나로 압축할 때 그 구간의 `min()`/`max()`만 남기는데, numpy의 `min`/`max`처럼 NaN이 하나라도 섞이면 그 구간 전체가 NaN이 되어버림 — 드물게만 값이 있고 나머지는 NaN인 컬럼(예: 3.1의 sparse ECHO 필드)을 마커로 찍어도, 줌아웃해서 한 구간에 실제값과 NaN이 함께 묶이는 순간부터 그 값이 통째로 사라져 화면에 아무것도 안 보였음. 마커는 "개별 샘플을 정확히 보고 싶다"는 사용자의 명시적 의사이므로, 마커가 설정된 시리즈는 다운샘플링을 끄고 항상 원본 데이터 그대로 렌더링(`SubplotView._apply_downsampling`) — 마커 없는 대용량 연속 곡선은 기존처럼 다운샘플링 유지
+- **마커 종류에 "Dot" 추가, 드문 데이터는 드래그 시 기본 마커+선 없음 적용** *(2026-08-27 추가)*: pyqtgraph에는 원(circle)과 별개인 작은 점 심볼이 없어서, "Dot"은 원 글리프('o')를 재사용하되 항상 작고 고정된 크기(4px, 선 굵기와 무관)로 그려 굵기에 비례해 커지는 "Circle"과 구분(`style_map.py`). 컬럼을 subplot에 드롭할 때(`ColumnStore.is_sparse`, 결측 비율 50% 초과) 값이 드문 컬럼이면 `marker="dot"` + `line_style="none"`을 기본 적용 — 기본 스타일(선만, 마커 없음)로는 위 downsampling 이슈 이전에 애초에 인접한 두 유효 샘플이 없어 화면에 아무것도 안 그려지므로 데이터를 추가했는데 아무 반응이 없어 보이는 상황 자체를 방지하고, 선을 아예 없애 마커만 남긴 것은 어쩌다 두 실제값이 인접한 행에 놓이더라도 서로 멀리 떨어진 두 시점 사이를 매끄럽게 잇는 것처럼 오해를 주지 않기 위함
+- **Header Trimming: 컬럼명에서 특정 문자열을 일괄 제거** *(2026-08-27 추가, 저장 방식 2026-08-27 재수정)*: 실제 로그 포맷은 모든 컬럼에 공통 접두/접미가 붙는 경우가 많음(메시지 네임스페이스 `AVS_TC_AILDA::`, 디코딩 필드 표시 `_Value`, `", "` 구분자로 인한 선행 공백 등). Data 탭의 "Header Trimming" 버튼으로 관리 다이얼로그(`HeaderTrimDialog`)를 열어 제거할 키워드 목록을 편집. 키워드는 등록 순서대로 각 컬럼명에서 단순 부분 문자열 제거(정규식 아님)로 적용되며, `peek_schema()`(컬럼 목록 즉시 표시)와 `load_csv()`(실제 데이터) 양쪽에 동일하게 적용해 이름이 어긋나지 않도록 함(`data/header_trim.py::trim_headers`). 트리밍 결과 이름이 겹치면 `_1`, `_2`처럼 번호를 붙여 구분하고, 합성 `Sequential` 컬럼과 겹치는 경우도 동일하게 처리. **번호 충돌 버그 수정** *(2026-08-28)*: 기존 구현은 각 원본 이름마다 독립적인 카운터로 `_1`, `_2`, ... 를 붙였는데, 그렇게 만든 이름이 마침 다른 컬럼이 이미 트리밍으로 갖게 된 이름과 우연히 같아지는 경우(예: 두 컬럼이 `RESERVED`로 트리밍되고 세 번째 컬럼이 원래부터 `RESERVED_2`인 상황에서, 카운터가 2에 도달하면 그 이름과 충돌)를 검사하지 않아 `polars`에 중복 컬럼명을 넘겨 "column with name ... has more than one occurrence" 로딩 실패를 일으켰음. 지금까지 실제로 사용된 이름 전체를 추적하며 충돌이 없어질 때까지 번호를 계속 올리도록 수정(`trim_headers`). 다이얼로그를 닫을 때 키워드 목록이 실제로 바뀌었고 CSV가 이미 열려있으면, 그 CSV를 즉시 같은 경로로 다시 로드해 반영(`CsvPanel._on_header_trim_clicked`) — 바뀐 게 없으면 불필요한 재로딩은 하지 않음. 재로딩은 일반적으로 CSV를 다시 여는 것과 동일하게 동작하므로, 저장되지 않은 subplot 구성이 있다면 (저장된 레이아웃이 없는 한) 초기화됨
+- **저장은 항상 사용자의 명시적 동작으로만** *(2026-08-27 확정)*: 처음엔 add/remove할 때마다 자동으로 파일(→ 처음엔 `QSettings`/Windows 레지스트리, 나중엔 실행파일 폴더의 JSON 파일)에 즉시 저장했는데, 사용자가 "프로그램이 마음대로 파일을 만들지 말고 불러오기/저장하기를 직접 하게 해달라"고 요청해 자동 저장을 완전히 제거. 지금은 다이얼로그의 Add/Remove가 그 창의 인메모리 목록만 바꾸고(디스크에 아무것도 안 씀), "Load from File..."/"Save to File..." 버튼(둘 다 `QFileDialog`, 기본 위치는 실행파일과 같은 폴더)으로만 파일을 읽고 쓸 수 있음(`ui/header_trim_dialog.py`). 앱 시작 시에는 실행파일과 같은 폴더의 기본 파일(`header_trim_keywords.json`, `ui/header_trim_settings.py::load_default_keywords`)이 있으면 한 번 읽어오되, 이 읽기 자체는 그 파일을 새로 만들거나 건드리지 않는 순수 조회임 — `CsvPanel.__init__`이 이걸로 세션의 활성 키워드 목록(`self._header_trim_keywords`)을 초기화하고, 이후로는 다이얼로그에서 편집한 값이 세션 동안 이 목록을 대체할 뿐 자동으로 파일에 반영되지 않음. `app_dir()`은 `sys.frozen`이 참이면 `sys.executable`이 있는 폴더(=실행파일과 같은 폴더), 소스 실행 중(개발 환경)이면 현재 작업 디렉터리를 가리킴
 
 ### 3.3 이중 Y축
 - 시리즈별로 주축(primary)/보조축(secondary) 배정 가능, 두 축은 독립적으로 스케일링
@@ -126,6 +133,12 @@ CSV 데이터를 불러와 다중 subplot 그래프로 시각화하는 데스크
 ### 3.4 데이터 무결성
 - `Sequential` 컬럼은 CSV 실제 데이터를 건드리지 않는 합성 컬럼(1..row_count)으로, timestamp 등 원본 X 후보가 없거나 손상됐을 때의 안전한 대안
 - **기본 X 컬럼은 `timestamp`** *(2026-08-23 추가)*: CSV 로드 시(그리고 grid 크기 변경으로 새 subplot이 생길 때) 각 subplot의 X 컬럼 초기값은 `timestamp` 컬럼이 존재하면 그것으로, 없으면(컬럼명이 다르거나 숫자/시간으로 파싱되지 않는 경우) `Sequential`로 자동 지정
+
+### 3.5 X축 offset *(2026-08-27 추가)*
+- subplot마다 X축에 더할 offset 값을 설정 가능 (`SubplotConfig.x_offset`, 기본값 0) — 시간/타임스탬프 컬럼을 특정 시점 기준으로 재정렬해 보고 싶을 때 사용하지만, 컬럼 종류와 무관하게 항상 입력란이 표시됨
+- Series 패널의 X 컬럼 선택 바로 아래 숫자 입력란("X offset")과 "Zero at start" 버튼 제공 — 버튼을 누르면 현재 X 데이터의 최솟값이 0이 되도록 offset을 자동 계산
+- X 컬럼을 바꿔도 offset은 리셋되지 않음(여러 컬럼을 번갈아 시험할 때 유지되는 편이 유용) — 레이아웃 저장/불러오기에도 다른 subplot 필드와 동일하게 포함됨
+- **"Apply X Column & Offset to All Subplots" 버튼** *(2026-08-27 추가)*: 활성 subplot에서 맞춰둔 X 컬럼/offset 조합을 그리드의 모든 subplot에 한 번에 복사(`MainWindow._on_apply_x_to_all_requested`). "Link X axis across subplots"(뷰의 확대/축소 범위만 동기화)와는 별개로, X 컬럼 선택 자체와 offset 값을 일괄 통일하고 싶을 때 사용 — 적용 후 전체 재도시 및 자동 범위 조정(autorange)까지 수행
 
 ---
 
@@ -159,17 +172,20 @@ csv_plot_maker/
   src/csv_plot_maker/
     data/
       loader.py            # polars 기반 CSV 로딩 (스키마 peek + 3단계 폴백 전체 로드)
+      header_trim.py        # 컬럼명에서 키워드 문자열을 제거하는 순수 함수(trim_headers)
       column_store.py      # {컬럼명: numpy array} 캐시
     models/
       series.py            # Series: id, y_column, axis, color, line_style, marker, width
-      subplot.py            # SubplotConfig: row, col, x_column, labels, show_legend, series[]
+      subplot.py            # SubplotConfig: row, col, x_column, x_offset, labels, show_legend, series[]
       project.py             # ProjectState: csv_path, grid_rows, grid_cols, active_subplot_id, subplots[]
       serialization.py       # JSON 저장/불러오기
     ui/
       main_window.py        # QMainWindow: 좌측 CSV 도크 + 중앙 캔버스 + 우측 설정 도크
-      csv_panel.py            # CSV 열기, 컬럼 리스트(검색/다중선택/드래그)
+      csv_panel.py            # CSV 열기, 컬럼 리스트(검색/다중선택/드래그), Header Trimming 버튼
+      header_trim_dialog.py   # Header Trimming 키워드 추가/삭제 관리 다이얼로그
+      header_trim_settings.py # Header Trimming 기본 파일 위치(app_dir)와 JSON 파일 읽기/쓰기 함수 -- 자동 저장은 하지 않음
       grid_config_panel.py    # rows/cols + 활성 subplot + Clear 버튼
-      series_panel.py          # X 컬럼, 시리즈 목록, 범례 토글
+      series_panel.py          # X 컬럼, X offset, 시리즈 목록, 범례 토글
       style_panel.py            # 선택된 시리즈의 색상/스타일/마커/굵기/축/삭제
       theme.py                   # Light/Dark/System 팔레트
     plotting/

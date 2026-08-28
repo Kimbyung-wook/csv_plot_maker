@@ -1,6 +1,6 @@
 [project]
 name = "csv-plot-maker"
-version = "0.2.0"
+version = "0.3.0"
 description = "CSV data plotting desktop tool with configurable subplots, dynamic line styles, and dual Y-axes"
 requires-python = ">=3.10"
 dependencies = [

@@ -24,13 +24,19 @@ def trim_headers(names: list[str], keywords: list[str], reserved: tuple[str, ...
                 result = result.replace(keyword, "")
         trimmed.append(result or name)
 
-    seen = {name: 0 for name in reserved}
+    used = set(reserved)
+    counts: dict[str, int] = {}
     deduped = []
     for name in trimmed:
-        if name not in seen:
-            seen[name] = 0
-            deduped.append(name)
-        else:
-            seen[name] += 1
-            deduped.append(f"{name}_{seen[name]}")
+        candidate = name
+        # A bumped suffix can itself collide with another trimmed name that
+        # already happens to look like "<name>_<n>" (e.g. one column trims to
+        # "RESERVED" while another already reads "RESERVED_2") -- keep
+        # bumping until the candidate is actually free instead of assuming
+        # the first bump is unused.
+        while candidate in used:
+            counts[name] = counts.get(name, 0) + 1
+            candidate = f"{name}_{counts[name]}"
+        used.add(candidate)
+        deduped.append(candidate)
     return deduped
