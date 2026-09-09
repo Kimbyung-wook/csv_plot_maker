@@ -11,3 +11,6 @@ tests/test_theme.py
 CSV Plot Maker.spec
 tests/fixtures/small.csv
 .claude/
+*.csv
+*.json
+*.xlsx
