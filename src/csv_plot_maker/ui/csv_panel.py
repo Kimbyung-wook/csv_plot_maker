@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -171,7 +170,7 @@ class CsvPanel(QWidget):
         self.status_label.setWordWrap(True)
         self.column_list = DraggableColumnList()
 
-        top_row = QHBoxLayout()
+        top_row = QVBoxLayout()
         top_row.addWidget(self.open_button)
         top_row.addWidget(self.header_trim_button)
 
