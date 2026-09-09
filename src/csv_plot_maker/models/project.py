@@ -15,6 +15,7 @@ class ProjectState:
     active_subplot_id: str | None = None
     subplots: list[SubplotConfig] = field(default_factory=list)
     link_x_axes: bool = False
+    legend_font_size: int = 9
 
     def build_default_grid(self) -> None:
         self.subplots = [

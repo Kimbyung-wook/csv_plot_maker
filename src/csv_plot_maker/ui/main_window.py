@@ -113,12 +113,14 @@ class MainWindow(QMainWindow):
         legend_font_menu = settings_menu.addMenu("Legend Font Size")
         legend_font_group = QActionGroup(self)
         legend_font_group.setExclusive(True)
-        for label, size_pt in (("Small", 7), ("Medium", 9), ("Large", 11)):
+        self._legend_font_actions: dict[int, object] = {}
+        for label, size_pt in (("Tiny", 5), ("Small", 7), ("Medium", 9), ("Large", 11)):
             action = legend_font_menu.addAction(label)
             action.setCheckable(True)
-            action.setChecked(size_pt == 9)
-            action.triggered.connect(lambda _checked=False, p=size_pt: self.plot_grid.set_legend_font_size(p))
+            action.setChecked(size_pt == self.project.legend_font_size)
+            action.triggered.connect(lambda _checked=False, p=size_pt: self._on_legend_font_size_changed(p))
             legend_font_group.addAction(action)
+            self._legend_font_actions[size_pt] = action
 
         info_menu = self.menuBar().addMenu("Info")
         license_action = info_menu.addAction("License Info")
@@ -126,6 +128,16 @@ class MainWindow(QMainWindow):
 
     def _on_show_license_info(self) -> None:
         LicenseDialog(self).exec()
+
+    def _on_legend_font_size_changed(self, size_pt: int) -> None:
+        self.project.legend_font_size = size_pt
+        self.plot_grid.set_legend_font_size(size_pt)
+        self._sync_legend_font_menu()
+
+    def _sync_legend_font_menu(self) -> None:
+        action = self._legend_font_actions.get(self.project.legend_font_size)
+        if action is not None:
+            action.setChecked(True)
 
     # -- helpers -----------------------------------------------------------
 
@@ -152,10 +164,12 @@ class MainWindow(QMainWindow):
         self.grid_panel.sync_grid_spins(self.project.grid_rows, self.project.grid_cols)
         self.grid_panel.set_link_x_axes(self.project.link_x_axes)
         self.plot_grid.set_link_x_axes(self.project.link_x_axes)
+        self.plot_grid.set_legend_font_size(self.project.legend_font_size)
+        self._sync_legend_font_menu()
 
     def _refresh_series_list(self) -> None:
         subplot = self._active_subplot()
-        items = [(s.id, f"{s.y_column}  [{s.axis}]") for s in subplot.series]
+        items = [(s.id, s.y_column, f"{s.y_column}  [{s.axis}]") for s in subplot.series]
         self.series_panel.refresh_series_list(items)
         # QListWidget selection is cleared on refresh; keep the style section in sync.
         self._selected_series_id = ""
@@ -171,6 +185,41 @@ class MainWindow(QMainWindow):
     def _x_data(self, subplot: SubplotConfig) -> np.ndarray:
         return self.column_store.get(subplot.x_column) + subplot.x_offset
 
+    def _shared_x_axis(self) -> bool:
+        """True when every subplot plots the exact same X data (same column
+        *and* same offset -- a different offset means different numbers on
+        screen even for the same column name).
+        """
+        subplots = self.project.subplots
+        if not subplots:
+            return False
+        first = subplots[0]
+        if not first.x_column:
+            return False
+        return all(sp.x_column == first.x_column and sp.x_offset == first.x_offset for sp in subplots)
+
+    def _effective_x_label(self, subplot: SubplotConfig) -> str:
+        """The bottom-axis title to actually show for this subplot.
+
+        When every subplot shares the same X data, only the bottom-most row
+        needs its own axis title repeated -- every other row's is blanked
+        out (not just left at its default) so pyqtgraph's AxisItem reserves
+        no height for it, growing every subplot's plot area vertically. Once
+        the subplots' X columns/offsets diverge again, every row gets its
+        own title back automatically (this is recomputed on every replot,
+        never stored as a one-off decision).
+        """
+        label = subplot.x_label or subplot.x_column or ""
+        is_bottom_row = subplot.row == self.project.grid_rows - 1
+        if self._shared_x_axis() and not is_bottom_row:
+            return ""
+        return label
+
+    def _sync_x_axis_titles(self) -> None:
+        for subplot in self.project.subplots:
+            view = self.plot_grid.get_view(subplot.row, subplot.col)
+            view.plot_item.setLabel("bottom", self._effective_x_label(subplot))
+
     def _replot_subplot(self, subplot: SubplotConfig) -> None:
         if self.column_store is None or not subplot.x_column:
             return
@@ -180,10 +229,15 @@ class MainWindow(QMainWindow):
             y_data = self.column_store.get(series.y_column)
             view.set_series_data(series, x_data, y_data)
         view.set_labels(
-            subplot.x_label or subplot.x_column,
+            self._effective_x_label(subplot),
             subplot.y_label_left,
             subplot.y_label_right,
         )
+        # Whether every OTHER subplot's own bottom title should currently be
+        # shown or blanked also depends on this subplot's X column/offset
+        # (see _shared_x_axis), so a change here can flip their titles too,
+        # not just this one's.
+        self._sync_x_axis_titles()
         # An empty subplot has nothing for a legend to label, so hide it
         # regardless of the show_legend toggle -- otherwise a bare legend
         # box with no entries sits in the corner of a blank plot.
@@ -210,15 +264,18 @@ class MainWindow(QMainWindow):
             if subplot.x_column not in names:
                 subplot.x_column = default
 
-    def _remove_series(self, series_id: str) -> None:
-        subplot = self._active_subplot()
+    def _remove_series_from(self, subplot: SubplotConfig, series_id: str) -> None:
         subplot.remove_series(series_id)
-        view = self._active_view()
+        view = self.plot_grid.get_view(subplot.row, subplot.col)
         view.remove_series(series_id)
         if not subplot.series:
             view.set_legend_visible(False)
         self.plot_grid.schedule_axis_width_sync()
-        self._refresh_series_list()
+        if subplot.id == self.project.active_subplot_id:
+            self._refresh_series_list()
+
+    def _remove_series(self, series_id: str) -> None:
+        self._remove_series_from(self._active_subplot(), series_id)
 
     def _clear_subplot(self, subplot: SubplotConfig) -> None:
         subplot.series = []
@@ -228,7 +285,7 @@ class MainWindow(QMainWindow):
         subplot.show_legend = True
         view = self.plot_grid.get_view(subplot.row, subplot.col)
         view.clear()
-        view.set_labels(subplot.x_column or "", "", "")
+        view.set_labels(self._effective_x_label(subplot), "", "")
         view.set_legend_visible(False)
 
     def _apply_theme(self, mode: str) -> None:
@@ -276,6 +333,8 @@ class MainWindow(QMainWindow):
         # clicking each subplot's "A" button, then re-sync the link with the
         # now-correct reference range.
         self._autorange_all_views()
+        if loaded_saved_layout:
+            self._restore_saved_y_ranges()
 
         data_mb = store.total_nbytes() / (1024 * 1024)
         message = (
@@ -317,6 +376,39 @@ class MainWindow(QMainWindow):
                 view.plot_item.setYRange(y_min, y_max, padding=0.02)
         if self.project.link_x_axes:
             self.plot_grid.set_link_x_axes(True)
+
+    def _capture_current_y_ranges(self) -> None:
+        """Snapshot each subplot's on-screen Y range (primary + secondary,
+        whatever the user last zoomed/panned to, or whatever autorange last
+        computed) into the project so Save Layout persists it. An empty
+        subplot has no meaningful view to capture, so it's reset to None
+        rather than saving pyqtgraph's meaningless default (0, 1) range.
+        """
+        for subplot in self.project.subplots:
+            if not subplot.series:
+                subplot.y_range_left = None
+                subplot.y_range_right = None
+                continue
+            view = self.plot_grid.get_view(subplot.row, subplot.col)
+            subplot.y_range_left = list(view.plot_item.vb.viewRange()[1])
+            subplot.y_range_right = (
+                list(view.right_vb.viewRange()[1]) if view.has_secondary_series() else None
+            )
+
+    def _restore_saved_y_ranges(self) -> None:
+        """Apply each subplot's saved Y range (see _capture_current_y_ranges)
+        on top of whatever _autorange_all_views() just computed -- a
+        subplot with no saved range (never saved before, or had none to
+        capture) is left at that fresh autorange fit instead.
+        """
+        for subplot in self.project.subplots:
+            if not subplot.series:
+                continue
+            view = self.plot_grid.get_view(subplot.row, subplot.col)
+            if subplot.y_range_left is not None:
+                view.plot_item.setYRange(*subplot.y_range_left, padding=0)
+            if subplot.y_range_right is not None and view.has_secondary_series():
+                view.right_vb.setYRange(*subplot.y_range_right, padding=0)
 
     def _on_grid_dims_changed(self, rows: int, cols: int) -> None:
         # rebuild() below throws away every subplot's PlotItem/ViewBox --
@@ -417,27 +509,56 @@ class MainWindow(QMainWindow):
         if subplot is None:
             return
 
+        # A column already plotted in a *different* subplot gets moved to the
+        # drop target instead of duplicated there -- dragging it onto another
+        # subplot reads as "move this series here", not "add a second copy".
+        # Dropping it back onto the subplot it's already in is unaffected
+        # (duplicate series within one subplot are allowed by design, see
+        # DraggableColumnList's docstring); a column already plotted in more
+        # than one subplot is left alone too, since which copy to move would
+        # be ambiguous.
+        matches = [
+            (sp, s)
+            for sp in self.project.subplots
+            if sp.id != subplot.id
+            for s in sp.series
+            if s.y_column == column_name
+        ]
+        moved_from: tuple[int, int] | None = None
+        if len(matches) == 1:
+            # Move the existing Series object itself rather than deleting it
+            # and adding a fresh default-styled one -- a move should carry
+            # over whatever color/marker/axis the user already set on it,
+            # not reset to defaults just because it changed subplots.
+            source_subplot, series = matches[0]
+            self._remove_series_from(source_subplot, series.id)
+            moved_from = (source_subplot.row, source_subplot.col)
+            subplot.add_series(series)
+        else:
+            color = next_default_color(len(subplot.series))
+            # A mostly-empty column (e.g. a rarely-updated periodic "echo"
+            # field) has its few real samples too far apart for a plain
+            # connecting line to ever draw between two of them -- default it
+            # to marker-only so it's visible immediately instead of looking
+            # like nothing was added. A connecting line would also be
+            # misleading here even on the rare occasion two real samples do
+            # land on adjacent rows: it implies a smooth transition between
+            # two far-apart timestamps that isn't actually in the data.
+            sparse = self.column_store.is_sparse(column_name)
+            series = Series(
+                y_column=column_name,
+                color=color,
+                marker="dot" if sparse else None,
+                line_style="none" if sparse else "solid",
+            )
+            subplot.add_series(series)
+
         self._set_active_subplot(subplot.id)
-        color = next_default_color(len(subplot.series))
-        # A mostly-empty column (e.g. a rarely-updated periodic "echo" field)
-        # has its few real samples too far apart for a plain connecting line
-        # to ever draw between two of them -- default it to marker-only so
-        # it's visible immediately instead of looking like nothing was added.
-        # A connecting line would also be misleading here even on the rare
-        # occasion two real samples do land on adjacent rows: it implies a
-        # smooth transition between two far-apart timestamps that isn't
-        # actually in the data.
-        sparse = self.column_store.is_sparse(column_name)
-        series = Series(
-            y_column=column_name,
-            color=color,
-            marker="dot" if sparse else None,
-            line_style="none" if sparse else "solid",
-        )
-        subplot.add_series(series)
         self._refresh_active_subplot_controls()
         self._replot_subplot(subplot)
         self.series_panel.select_series_id(series.id)
+        if moved_from is not None:
+            self.statusBar().showMessage(f"Moved '{column_name}' from {moved_from} to ({row}, {col})")
 
     def _on_series_selection_changed(self, series_id: str) -> None:
         self._selected_series_id = series_id
@@ -505,6 +626,7 @@ class MainWindow(QMainWindow):
         if not self.project.csv_path:
             self.statusBar().showMessage("Load a CSV first")
             return
+        self._capture_current_y_ranges()
         config_path = config_path_for_csv(self.project.csv_path)
         save_project(self.project, str(config_path))
         self.statusBar().showMessage(f"Saved layout to {config_path.name}")
@@ -517,6 +639,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Save Layout As", default_path, "JSON Files (*.json)")
         if not path:
             return
+        self._capture_current_y_ranges()
         save_project(self.project, path)
         self.statusBar().showMessage(f"Saved layout to {Path(path).name}")
 
@@ -582,6 +705,7 @@ class MainWindow(QMainWindow):
         # (auto range) button -- then, if X-linking is on, re-broadcast
         # using the now-correctly-fitted reference range.
         self._autorange_all_views()
+        self._restore_saved_y_ranges()
 
         message = f"Loaded layout from {Path(path).name}"
         if dropped:

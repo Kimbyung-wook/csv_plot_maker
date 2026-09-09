@@ -7,6 +7,68 @@ from pyqtgraph.Qt import QtCore
 from csv_plot_maker.models.series import Series
 from csv_plot_maker.plotting.style_map import make_pen, symbol_kwargs
 
+# The pt size at which pyqtgraph's own built-in legend icon size (20x20px,
+# see ItemSample.__init__) already looks right -- this app's own "Medium"
+# legend size default, so scaling around it leaves Medium/Large unchanged.
+_LEGEND_SAMPLE_REFERENCE_PT = 9
+_LEGEND_SAMPLE_MAX_PX = 20
+_LEGEND_SAMPLE_MIN_PX = 8
+# Tiny (5pt) hand-tuned smaller than the proportional formula below would
+# give (round(20 * 5 / 9) == 11) -- asked for explicitly, rather than
+# recalibrating the formula itself and nudging Small's icon size too.
+_LEGEND_SAMPLE_SIZE_OVERRIDES: dict[int, int] = {5: 9}
+
+
+def _legend_sample_size(size_pt: int) -> int:
+    if size_pt in _LEGEND_SAMPLE_SIZE_OVERRIDES:
+        return _LEGEND_SAMPLE_SIZE_OVERRIDES[size_pt]
+    return max(_LEGEND_SAMPLE_MIN_PX, min(_LEGEND_SAMPLE_MAX_PX, round(_LEGEND_SAMPLE_MAX_PX * size_pt / _LEGEND_SAMPLE_REFERENCE_PT)))
+
+
+class _ScalableItemSample(pg.ItemSample):
+    """pyqtgraph's legend icon (the line/marker swatch next to each entry's
+    text), but its square scales down for small legend fonts instead of
+    staying a fixed 20x20px.
+
+    Below the Medium (9pt) legend size, that fixed 20px icon ends up taller
+    than the now-smaller text next to it, so the icon alone pins the row's
+    height -- shrinking the font further (e.g. to Tiny) stops shrinking the
+    row/entry spacing even though the text keeps getting smaller. Default
+    size is a class attribute (not passed through the constructor) because
+    pyqtgraph's own LegendItem.addItem() always instantiates a sample as
+    `self.sampleType(item)` -- no room to pass a size in -- so
+    SubplotView.set_legend_font_size() sets this class attribute before
+    resizing already-added samples, and any newly-added curve's icon then
+    starts out already correctly sized.
+    """
+
+    default_size = _LEGEND_SAMPLE_MAX_PX
+
+    def __init__(self, item) -> None:
+        super().__init__(item)
+        self.set_size(type(self).default_size)
+
+    def set_size(self, size: int) -> None:
+        self._size = size
+        self.setFixedWidth(size)
+        self.setFixedHeight(size)
+        self.update()
+
+    def boundingRect(self) -> QtCore.QRectF:
+        return QtCore.QRectF(0, 0, self._size, self._size)
+
+    def paint(self, p, *args) -> None:
+        # The inherited paint() draws at coordinates calibrated for a fixed
+        # 20x20 box (e.g. the pen-sample line runs from (0, 11) to (20, 11))
+        # -- scale the painter to this instance's actual size instead of
+        # reimplementing every coordinate for an arbitrary box size. A
+        # no-op (scale factor 1) whenever _size is still the default 20.
+        p.save()
+        scale = self._size / _LEGEND_SAMPLE_MAX_PX
+        p.scale(scale, scale)
+        super().paint(p, *args)
+        p.restore()
+
 
 class SubplotView:
     """Wraps one pyqtgraph PlotItem: incremental series/style/label updates.
@@ -49,7 +111,7 @@ class SubplotView:
         # a single large plot, but with many small subplots stacked in a
         # grid the legend box ends up disproportionately large next to the
         # data it's labeling. Tighten both.
-        self.plot_item.addLegend(horSpacing=3, verSpacing=0)
+        self.plot_item.addLegend(horSpacing=3, verSpacing=0, sampleType=_ScalableItemSample)
         legend = self.plot_item.legend
         legend.layout.setContentsMargins(4, 4, 4, 4)
         # Within the ViewBox's own children, later-added items stack on top
@@ -182,8 +244,16 @@ class SubplotView:
         # LegendItem.setLabelTextSize() only updates each label's stored opts
         # -- like setLabelTextColor() (see apply_theme), it never re-renders
         # the QGraphicsTextItem's cached HTML on its own.
-        for _sample, label in legend.items:
+        sample_px = _legend_sample_size(size_pt)
+        # A class attribute, not per-instance state: pyqtgraph's own
+        # LegendItem.addItem() always builds a fresh sample as
+        # `self.sampleType(item)` with no way to pass a size in, so this is
+        # what makes any curve added *after* this point start out already
+        # sized correctly instead of at the 20px default.
+        _ScalableItemSample.default_size = sample_px
+        for sample, label in legend.items:
             label.setText(label.text)
+            sample.set_size(sample_px)
         self._resize_legend_to_fit(legend)
 
     @staticmethod

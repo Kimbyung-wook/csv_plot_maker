@@ -39,4 +39,5 @@ def load_project(path: str) -> ProjectState:
         active_subplot_id=data.get("active_subplot_id"),
         subplots=subplots,
         link_x_axes=data.get("link_x_axes", False),
+        legend_font_size=data.get("legend_font_size", 9),
     )

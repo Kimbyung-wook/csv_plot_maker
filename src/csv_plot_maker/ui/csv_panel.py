@@ -52,6 +52,15 @@ class DraggableColumnList(QListWidget):
         self.setDragEnabled(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
+    def keyPressEvent(self, event) -> None:
+        if event.matches(QKeySequence.StandardKey.SelectAll):
+            # Ctrl+A select-all lives on the subplot's own series list
+            # instead (SeriesListWidget) -- swallow it here rather than
+            # falling through to Qt's own default select-all behavior,
+            # which ExtendedSelection provides for free.
+            return
+        super().keyPressEvent(event)
+
     def startDrag(self, supportedActions) -> None:
         items = self.selectedItems()
         if not items:

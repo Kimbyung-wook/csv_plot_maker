@@ -17,6 +17,12 @@ class SubplotConfig:
     x_label: str = ""
     y_label_left: str = ""
     y_label_right: str = ""
+    # [min, max] of the primary/secondary Y axis as last seen on screen, so
+    # a manual zoom/pan survives Save Layout / Load Layout -- None means "no
+    # saved view yet, autorange to fit the data" (a freshly built subplot,
+    # or one with no series to have a view over in the first place).
+    y_range_left: list[float] | None = None
+    y_range_right: list[float] | None = None
     show_legend: bool = True
     series: list[Series] = field(default_factory=list)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)

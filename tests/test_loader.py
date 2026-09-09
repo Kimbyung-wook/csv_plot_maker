@@ -10,6 +10,9 @@ from csv_plot_maker.data.loader import load_csv, peek_schema
 FIXTURE = Path(__file__).parent / "fixtures" / "small.csv"
 PRECISION_FIXTURE = Path(__file__).parent / "fixtures" / "precision.csv"
 INTEGERS_FIXTURE = Path(__file__).parent / "fixtures" / "integers.csv"
+RAGGED_FIXTURE = Path(__file__).parent / "fixtures" / "ragged.csv"
+TIME_STRING_FIXTURE = Path(__file__).parent / "fixtures" / "time_string.csv"
+SPARSE_NUMERIC_FIXTURE = Path(__file__).parent / "fixtures" / "sparse_numeric.csv"
 
 
 def test_peek_schema_returns_column_names():
@@ -82,6 +85,83 @@ def test_load_csv_handles_nullable_integer_columns_via_float32_path():
     assert arr[0] == 1.0
     assert np.isnan(arr[1])
     assert arr[2] == 3.0
+
+
+def test_load_csv_keeps_entirely_empty_trailing_column_as_all_nan_numeric():
+    # "b" is never written on any row (ragged CSV: rows just stop after "a"
+    # instead of writing a trailing empty field) -- polars can't infer a
+    # dtype for an all-null column and falls back to String, but this must
+    # still be treated as an empty *numeric* column (all-NaN), not dropped
+    # like a genuine text column.
+    store = load_csv(str(RAGGED_FIXTURE))
+    assert store.numeric["b"] is True
+    arr = store.get("b")
+    assert arr.dtype == np.float64
+    assert arr.shape == (3,)
+    assert np.all(np.isnan(arr))
+
+
+def test_load_csv_converts_time_strings_to_seconds():
+    # "t" holds HH:MM:SS.fff strings -- try_parse_dates infers pl.Time, and
+    # load_csv should convert its physical (nanoseconds-since-midnight)
+    # representation down to seconds, the unit users plot against.
+    store = load_csv(str(TIME_STRING_FIXTURE))
+    assert store.numeric["t"] is True
+    arr = store.get("t")
+    assert arr.dtype == np.float64
+    assert np.allclose(arr, [5025.678, 5026.678, 5027.678])
+
+
+def test_load_csv_recovers_int_columns_that_polars_misjudged_as_string():
+    # "sparse_int" is null for its first 120 rows (past polars' sampled
+    # schema-inference window) and only holds real integers ("1", "2") much
+    # later -- polars can't guess a numeric dtype from an all-null sample and
+    # defaults to String, then parses the real values as their string form
+    # without ever raising the schema error the load_csv() retry ladder
+    # watches for. The strict-cast salvage must recover this as numeric
+    # instead of leaving it dropped as text. It's mostly null (same as any
+    # nullable Int64 column), so it comes back through the float32 path, not
+    # a true integer dtype -- see the nullable-integer test for integers.csv.
+    store = load_csv(str(SPARSE_NUMERIC_FIXTURE))
+    assert store.numeric["sparse_int"] is True
+    arr = store.get("sparse_int")
+    assert arr.dtype == np.float32
+    assert arr[120] == 1
+    assert arr[135] == 2
+    assert np.isnan(arr[0])
+
+
+def test_load_csv_recovers_float_columns_that_polars_misjudged_as_string():
+    # Same scenario as the int case above, but the salvaged values have a
+    # decimal point -- the Int64 cast attempt must fail and fall through to
+    # the Float64 cast rather than being dropped entirely.
+    store = load_csv(str(SPARSE_NUMERIC_FIXTURE))
+    assert store.numeric["sparse_float"] is True
+    arr = store.get("sparse_float")
+    assert arr.dtype in (np.float32, np.float64)
+    assert arr[120] == pytest.approx(1.5)
+    assert arr[135] == pytest.approx(2.75)
+
+
+def test_load_csv_still_drops_genuine_text_columns_misjudged_as_string():
+    # "label" holds real, non-numeric text ("x"/"y") -- the strict-cast
+    # salvage must fail for it (as intended) and it must still be dropped
+    # like any other non-plottable text column, not silently coerced.
+    store = load_csv(str(SPARSE_NUMERIC_FIXTURE))
+    assert store.numeric["label"] is False
+    assert "label" not in store.columns
+
+
+def test_peek_schema_applies_header_trim_keywords():
+    names = peek_schema(str(FIXTURE), header_trim_keywords=["lab"])
+    assert names == ["Sequential", "t", "a", "b", "el"]
+
+
+def test_load_csv_applies_header_trim_keywords_to_stored_column_names():
+    store = load_csv(str(FIXTURE), header_trim_keywords=["lab"])
+    assert "label" not in store.dtypes
+    assert "el" in store.dtypes
+    assert store.numeric["el"] is False
 
 
 def test_load_csv_does_not_retry_on_memory_error():

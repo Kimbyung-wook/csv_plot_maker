@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, Signal
+from PySide6.QtGui import QDrag, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -14,17 +16,51 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+_Y_COLUMN_ROLE = Qt.ItemDataRole.UserRole + 1
+
 
 class SeriesListWidget(QListWidget):
-    """Y-series list that also deletes the current row on Delete/Backspace."""
+    """Y-series list: multi-select like the Data tab's column list, and
+    itself a drag source onto a subplot to move series between subplots.
+
+    Ctrl-click toggles a row, Shift-click selects a contiguous range, and
+    Ctrl+A selects every row -- all native to ExtendedSelection. Dragging
+    (press-and-move) a selected row exports its column name(s) as plain-text
+    MIME data, same convention as the Data tab's DraggableColumnList, so
+    PlotGridWidget.dropEvent() handles a drop from either source identically.
+    Deliberately does *not* extend the selection while dragging (Qt's default
+    for ExtendedSelection without drag support) -- once setDragEnabled(True)
+    is on, a press-and-move on a selected row starts a drag instead, which is
+    what makes the list a usable drag source in the first place.
+
+    Delete/Backspace deletes every selected row, not just the current one.
+    """
 
     delete_requested = Signal()
 
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setDragEnabled(True)
+
     def keyPressEvent(self, event) -> None:
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.currentItem() is not None:
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selectedItems():
             self.delete_requested.emit()
             return
+        if event.matches(QKeySequence.StandardKey.SelectAll):
+            self.selectAll()
+            return
         super().keyPressEvent(event)
+
+    def startDrag(self, supportedActions) -> None:
+        items = self.selectedItems()
+        if not items:
+            return
+        mime = QMimeData()
+        mime.setText("\n".join(item.data(_Y_COLUMN_ROLE) for item in items))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
 
 
 class SeriesPanel(QWidget):
@@ -110,13 +146,14 @@ class SeriesPanel(QWidget):
         self.legend_checkbox.setChecked(visible)
         self.legend_checkbox.blockSignals(False)
 
-    def refresh_series_list(self, series_items: list[tuple[str, str]]) -> None:
-        """series_items: list of (series_id, display_text)."""
+    def refresh_series_list(self, series_items: list[tuple[str, str, str]]) -> None:
+        """series_items: list of (series_id, y_column, display_text)."""
         self.series_list.blockSignals(True)
         self.series_list.clear()
-        for series_id, text in series_items:
+        for series_id, y_column, text in series_items:
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, series_id)
+            item.setData(_Y_COLUMN_ROLE, y_column)
             self.series_list.addItem(item)
         self.series_list.blockSignals(False)
 
@@ -140,6 +177,11 @@ class SeriesPanel(QWidget):
         self.series_selection_changed.emit(series_id or "")
 
     def _on_delete_requested(self) -> None:
-        series_id = self.selected_series_id()
-        if series_id:
-            self.series_delete_requested.emit(series_id)
+        # Captured up front as plain ids (not QListWidgetItem references) --
+        # each emit below is handled synchronously and typically rebuilds
+        # this list (see MainWindow._remove_series), which would invalidate
+        # item references but not a list of already-extracted id strings.
+        ids = [item.data(Qt.ItemDataRole.UserRole) for item in self.series_list.selectedItems()]
+        for series_id in ids:
+            if series_id:
+                self.series_delete_requested.emit(series_id)
