@@ -28,7 +28,7 @@ _AXIS_LABEL_FIELDS = {"bottom": "x_label", "left": "y_label_left", "right": "y_l
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"CSV Plot Maker v{__version__} ({BUILD_DATE})")
+        self.setWindowTitle(f"CSV Plot Maker v{__version__} (build date : {BUILD_DATE})")
 
         self.column_store: ColumnStore | None = None
         self.project = ProjectState(grid_rows=1, grid_cols=1)
