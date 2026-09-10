@@ -2,6 +2,7 @@ import json
 
 from csv_plot_maker.models.project import ProjectState
 from csv_plot_maker.models.serialization import load_project, save_project
+from csv_plot_maker.models.series import Series
 
 
 def test_save_then_load_round_trips_legend_font_size(tmp_path):
@@ -45,6 +46,41 @@ def test_save_then_load_round_trips_subplot_y_ranges(tmp_path):
 
     assert loaded.subplots[0].y_range_left == [-1.0, 1.0]
     assert loaded.subplots[0].y_range_right == [-100.0, 100.0]
+
+
+def test_save_then_load_round_trips_series_scale_and_offset(tmp_path):
+    path = tmp_path / "layout.json"
+    project = ProjectState(grid_rows=1, grid_cols=1)
+    project.build_default_grid()
+    project.subplots[0].add_series(Series(y_column="altitude_m", scale=2.5, offset=-3.0))
+
+    save_project(project, str(path))
+    loaded = load_project(str(path))
+
+    loaded_series = loaded.subplots[0].series[0]
+    assert loaded_series.scale == 2.5
+    assert loaded_series.offset == -3.0
+
+
+def test_load_project_defaults_scale_and_offset_for_older_layout_files(tmp_path):
+    # Same backward-compat concern as legend_font_size above, but for a
+    # per-series field pair introduced after scale/offset didn't exist yet.
+    path = tmp_path / "layout.json"
+    project = ProjectState(grid_rows=1, grid_cols=1)
+    project.build_default_grid()
+    project.subplots[0].add_series(Series(y_column="altitude_m"))
+
+    save_project(project, str(path))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["subplots"][0]["series"][0]["scale"]
+    del data["subplots"][0]["series"][0]["offset"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = load_project(str(path))
+
+    loaded_series = loaded.subplots[0].series[0]
+    assert loaded_series.scale == 1.0
+    assert loaded_series.offset == 0.0
 
 
 def test_load_project_defaults_y_ranges_to_none_for_older_layout_files(tmp_path):

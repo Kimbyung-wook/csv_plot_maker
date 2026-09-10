@@ -25,6 +25,28 @@ def _legend_sample_size(size_pt: int) -> int:
     return max(_LEGEND_SAMPLE_MIN_PX, min(_LEGEND_SAMPLE_MAX_PX, round(_LEGEND_SAMPLE_MAX_PX * size_pt / _LEGEND_SAMPLE_REFERENCE_PT)))
 
 
+def _format_transform_number(value: float) -> str:
+    return f"{value:g}"
+
+
+def _legend_name(series: Series) -> str:
+    """The legend entry text for one series: just the column name at the
+    default scale=1/offset=0, or the column name plus a short summary of
+    the applied linear transform (transformed = raw * scale + offset)
+    otherwise -- so a viewer can tell a curve isn't showing raw values
+    without having to reopen the style panel.
+    """
+    if series.scale == 1.0 and series.offset == 0.0:
+        return series.y_column
+    bits = []
+    if series.scale != 1.0:
+        bits.append(f"×{_format_transform_number(series.scale)}")
+    if series.offset != 0.0:
+        sign = "+" if series.offset >= 0 else "−"
+        bits.append(f"{sign}{_format_transform_number(abs(series.offset))}")
+    return f"{series.y_column} ({' '.join(bits)})"
+
+
 class _ScalableItemSample(pg.ItemSample):
     """pyqtgraph's legend icon (the line/marker swatch next to each entry's
     text), but its square scales down for small legend fonts instead of
@@ -86,6 +108,7 @@ class SubplotView:
         self.plot_item = plot_item
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._curve_axis: dict[str, str] = {}
+        self._curve_legend_names: dict[str, str] = {}
         self._foreground = pg.mkColor("k")
         # Grid lines are painted by the axis items (top/bottom/left/right),
         # which are siblings of the ViewBox in the scene tree, not children
@@ -144,13 +167,15 @@ class SubplotView:
         if curve is None:
             pen = make_pen(series)
             sym = symbol_kwargs(series)
-            curve = pg.PlotDataItem(x, y, pen=pen, name=series.y_column, **sym)
+            name = _legend_name(series)
+            curve = pg.PlotDataItem(x, y, pen=pen, name=name, **sym)
+            self._curve_legend_names[series.id] = name
             if series.axis == "secondary":
                 self.right_vb.addItem(curve)
                 # ViewBox.addItem (unlike PlotItem.addItem) doesn't know about the
                 # legend, so secondary-axis curves need to be registered by hand.
                 if self.plot_item.legend is not None:
-                    self.plot_item.legend.addItem(curve, series.y_column)
+                    self.plot_item.legend.addItem(curve, name)
             else:
                 # PlotItem.addItem already registers named items with the legend
                 # itself -- an extra manual addItem() here would double the entry.
@@ -168,6 +193,21 @@ class SubplotView:
         else:
             curve.setData(x, y)
             self._apply_style(curve, series)
+            self._sync_legend_name(series)
+
+    def _sync_legend_name(self, series: Series) -> None:
+        curve = self._curves.get(series.id)
+        legend = self.plot_item.legend
+        if curve is None or legend is None:
+            return
+        name = _legend_name(series)
+        if self._curve_legend_names.get(series.id) == name:
+            return
+        self._curve_legend_names[series.id] = name
+        for sample, label in legend.items:
+            if sample.item is curve:
+                label.setText(name)
+                break
 
     def update_series_style(self, series: Series) -> None:
         curve = self._curves.get(series.id)
@@ -177,6 +217,7 @@ class SubplotView:
     def remove_series(self, series_id: str) -> None:
         curve = self._curves.pop(series_id, None)
         axis = self._curve_axis.pop(series_id, "primary")
+        self._curve_legend_names.pop(series_id, None)
         if curve is not None:
             if self.plot_item.legend is not None:
                 self.plot_item.legend.removeItem(curve)

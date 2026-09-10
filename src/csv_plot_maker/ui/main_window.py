@@ -77,6 +77,7 @@ class MainWindow(QMainWindow):
         self.series_panel.legend_toggled.connect(self._on_legend_toggled)
         self.style_panel.style_changed.connect(self._on_style_changed)
         self.style_panel.axis_changed.connect(self._on_series_axis_changed)
+        self.style_panel.transform_changed.connect(self._on_series_transform_changed)
         self.style_panel.remove_requested.connect(self._on_style_remove_requested)
         self.plot_grid.subplot_clicked.connect(self._on_canvas_subplot_clicked)
         self.plot_grid.column_dropped.connect(self._on_column_dropped)
@@ -185,6 +186,9 @@ class MainWindow(QMainWindow):
     def _x_data(self, subplot: SubplotConfig) -> np.ndarray:
         return self.column_store.get(subplot.x_column) + subplot.x_offset
 
+    def _series_y_data(self, series: Series) -> np.ndarray:
+        return self.column_store.get(series.y_column) * series.scale + series.offset
+
     def _shared_x_axis(self) -> bool:
         """True when every subplot plots the exact same X data (same column
         *and* same offset -- a different offset means different numbers on
@@ -226,7 +230,7 @@ class MainWindow(QMainWindow):
         view = self.plot_grid.get_view(subplot.row, subplot.col)
         x_data = self._x_data(subplot)
         for series in subplot.series:
-            y_data = self.column_store.get(series.y_column)
+            y_data = self._series_y_data(series)
             view.set_series_data(series, x_data, y_data)
         view.set_labels(
             self._effective_x_label(subplot),
@@ -368,8 +372,8 @@ class MainWindow(QMainWindow):
             view = self.plot_grid.get_view(subplot.row, subplot.col)
             x_data = self._x_data(subplot)
             x_min, x_max = float(np.nanmin(x_data)), float(np.nanmax(x_data))
-            y_min = min(float(np.nanmin(self.column_store.get(s.y_column))) for s in subplot.series)
-            y_max = max(float(np.nanmax(self.column_store.get(s.y_column))) for s in subplot.series)
+            y_min = min(float(np.nanmin(self._series_y_data(s))) for s in subplot.series)
+            y_max = max(float(np.nanmax(self._series_y_data(s))) for s in subplot.series)
             if x_max > x_min:
                 view.plot_item.setXRange(x_min, x_max, padding=0.02)
             if y_max > y_min:
@@ -594,7 +598,7 @@ class MainWindow(QMainWindow):
             return
         series.axis = axis
         x_data = self._x_data(subplot)
-        y_data = self.column_store.get(series.y_column)
+        y_data = self._series_y_data(series)
         self._active_view().set_series_data(series, x_data, y_data)
         # Reassigning a series to/from the secondary axis changes whether this
         # subplot's right axis needs its shared reserved width (see
@@ -617,6 +621,19 @@ class MainWindow(QMainWindow):
         series.marker = self.style_panel.current_marker()
         series.width = self.style_panel.current_width()
         self._active_view().update_series_style(series)
+
+    def _on_series_transform_changed(self) -> None:
+        if not self._selected_series_id or self.column_store is None:
+            return
+        subplot = self._active_subplot()
+        series = subplot.get_series(self._selected_series_id)
+        if series is None:
+            return
+        series.scale = self.style_panel.current_scale()
+        series.offset = self.style_panel.current_offset()
+        x_data = self._x_data(subplot)
+        y_data = self._series_y_data(series)
+        self._active_view().set_series_data(series, x_data, y_data)
 
     def _on_style_remove_requested(self) -> None:
         if self._selected_series_id:

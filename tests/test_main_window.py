@@ -55,6 +55,29 @@ def test_apply_x_to_all_copies_active_subplots_x_column_and_offset(qtbot):
         assert sp.x_offset == 5.0
 
 
+def test_transform_changed_applies_scale_and_offset_to_the_selected_series(qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.column_store = _store_with(
+        sparse_col=np.array([np.nan, 1.0]),
+        dense_col=np.array([1.0, 2.0, 3.0, 4.0]),
+    )
+    subplot = win._active_subplot()
+    subplot.x_column = "dense"
+    win._on_column_dropped(subplot.row, subplot.col, "dense")
+    series = subplot.series[-1]
+    win._on_series_selection_changed(series.id)
+
+    win.style_panel.scale_spin.setValue(2.0)
+    win.style_panel.offset_spin.setValue(-1.0)
+
+    assert series.scale == 2.0
+    assert series.offset == -1.0
+    curve = win._active_view()._curves[series.id]
+    _xd, yd = curve.getData()
+    assert list(yd) == [1.0, 3.0, 5.0, 7.0]  # dense * 2 - 1
+
+
 def test_dropping_a_dense_column_keeps_default_solid_line_and_no_marker(qtbot):
     win = MainWindow()
     qtbot.addWidget(win)

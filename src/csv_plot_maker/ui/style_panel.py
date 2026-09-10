@@ -19,6 +19,28 @@ from csv_plot_maker.plotting.style_map import MARKER_CHOICES
 LINE_STYLES = ["solid", "dash", "dot", "dashdot", "none"]
 
 
+class DefaultingDoubleSpinBox(QDoubleSpinBox):
+    """A QDoubleSpinBox that snaps to a fixed default instead of whatever
+    value was there before editing, when the field is left in a state Qt
+    can't interpret as a number (typically: cleared to blank, then focus
+    moves away before a full replacement is typed).
+
+    QAbstractSpinBox's own default (`CorrectToPreviousValue`) calls
+    `fixup()` with the unparseable text in that situation and uses whatever
+    string it returns -- by default just the last valid value, which reads
+    as "my edit got silently undone". Returning this box's own default here
+    instead makes clearing the field behave as "reset to default", not
+    "revert my last change".
+    """
+
+    def __init__(self, default: float, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._default = default
+
+    def fixup(self, text: str) -> str:
+        return str(self._default)
+
+
 class StylePanel(QWidget):
     """Bottom of the merged config panel: appears only once a Y series is selected.
 
@@ -31,6 +53,7 @@ class StylePanel(QWidget):
 
     style_changed = Signal()
     axis_changed = Signal(str)  # "primary" or "secondary"
+    transform_changed = Signal()  # scale and/or offset edited
     remove_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -60,6 +83,21 @@ class StylePanel(QWidget):
         self.width_spin.setSingleStep(0.5)
         self.width_spin.setValue(1.5)
 
+        # transformed = raw * scale + offset, applied to this series' own Y
+        # data before plotting -- e.g. unit conversion or a quick calibration
+        # tweak on one already-added series, without touching the CSV.
+        self.scale_spin = DefaultingDoubleSpinBox(default=1.0)
+        self.scale_spin.setRange(-1e9, 1e9)
+        self.scale_spin.setDecimals(6)
+        self.scale_spin.setSingleStep(0.1)
+        self.scale_spin.setValue(1.0)
+
+        self.offset_spin = DefaultingDoubleSpinBox(default=0.0)
+        self.offset_spin.setRange(-1e12, 1e12)
+        self.offset_spin.setDecimals(3)
+        self.offset_spin.setSingleStep(1.0)
+        self.offset_spin.setValue(0.0)
+
         self.remove_button = QPushButton("Remove Series")
 
         form = QFormLayout()
@@ -68,6 +106,8 @@ class StylePanel(QWidget):
         form.addRow("Line style:", self.line_style_combo)
         form.addRow("Marker:", self.marker_combo)
         form.addRow("Width:", self.width_spin)
+        form.addRow("Scale:", self.scale_spin)
+        form.addRow("Offset:", self.offset_spin)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Series style"))
@@ -79,6 +119,8 @@ class StylePanel(QWidget):
         self.line_style_combo.currentTextChanged.connect(self._emit_changed)
         self.marker_combo.currentTextChanged.connect(self._emit_changed)
         self.width_spin.valueChanged.connect(self._emit_changed)
+        self.scale_spin.valueChanged.connect(self._emit_transform_changed)
+        self.offset_spin.valueChanged.connect(self._emit_transform_changed)
         self.remove_button.clicked.connect(lambda: self.remove_requested.emit())
 
         self.setVisible(False)  # nothing shown until a series is selected
@@ -104,6 +146,8 @@ class StylePanel(QWidget):
             marker_name = next((k for k, v in MARKER_CHOICES.items() if v == series.marker), "None")
             self.marker_combo.setCurrentText(marker_name)
             self.width_spin.setValue(series.width)
+            self.scale_spin.setValue(series.scale)
+            self.offset_spin.setValue(series.offset)
             idx = self.axis_combo.findData(series.axis)
             if idx >= 0:
                 self.axis_combo.setCurrentIndex(idx)
@@ -125,6 +169,12 @@ class StylePanel(QWidget):
     def current_width(self) -> float:
         return self.width_spin.value()
 
+    def current_scale(self) -> float:
+        return self.scale_spin.value()
+
+    def current_offset(self) -> float:
+        return self.offset_spin.value()
+
     def _set_button_color(self, hex_color: str) -> None:
         self.color_button.setStyleSheet(f"background-color: {hex_color};")
 
@@ -138,6 +188,10 @@ class StylePanel(QWidget):
     def _emit_changed(self, *_args) -> None:
         if not self._updating:
             self.style_changed.emit()
+
+    def _emit_transform_changed(self, *_args) -> None:
+        if not self._updating:
+            self.transform_changed.emit()
 
     def _on_axis_changed(self, index: int) -> None:
         if self._updating_axis or index < 0:

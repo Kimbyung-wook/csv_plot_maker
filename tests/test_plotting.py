@@ -2,7 +2,7 @@ import numpy as np
 
 from csv_plot_maker.models.series import Series
 from csv_plot_maker.plotting.plot_grid_widget import PlotGridWidget
-from csv_plot_maker.plotting.subplot_view import _legend_sample_size
+from csv_plot_maker.plotting.subplot_view import _legend_name, _legend_sample_size
 
 
 def test_plot_grid_widget_default_1x1(qtbot):
@@ -67,6 +67,37 @@ def test_marker_disables_auto_downsampling(qtbot):
     plain.marker = "o"
     view.update_series_style(plain)
     assert curve.opts["autoDownsample"] is False
+
+
+def test_legend_name_is_plain_column_name_at_default_scale_and_offset():
+    series = Series(y_column="altitude_m")
+    assert _legend_name(series) == "altitude_m"
+
+
+def test_legend_name_shows_scale_and_offset_when_not_default():
+    assert _legend_name(Series(y_column="a", scale=2.0)) == "a (×2)"
+    assert _legend_name(Series(y_column="a", offset=3.0)) == "a (+3)"
+    assert _legend_name(Series(y_column="a", offset=-3.0)) == "a (−3)"
+    assert _legend_name(Series(y_column="a", scale=2.0, offset=-3.0)) == "a (×2 −3)"
+
+
+def test_legend_entry_text_updates_when_a_plotted_series_scale_or_offset_changes(qtbot):
+    widget = PlotGridWidget()
+    qtbot.addWidget(widget)
+    view = widget.get_view(0, 0)
+
+    series = Series(y_column="a", color="#1f77b4")
+    x = np.array([0.0, 1.0])
+    y = np.array([1.0, 2.0])
+    view.set_series_data(series, x, y)
+    _sample, label = view.plot_item.legend.items[0]
+    assert label.text == "a"
+
+    series.scale = 2.0
+    series.offset = 1.0
+    view.set_series_data(series, x, y * 2.0 + 1.0)
+    _sample, label = view.plot_item.legend.items[0]
+    assert label.text == "a (×2 +1)"
 
 
 def test_legend_sample_size_formula():

@@ -22,4 +22,6 @@ class Series:
     line_style: LineStyle = "solid"
     marker: str | None = None
     width: float = 1.5
+    scale: float = 1.0
+    offset: float = 0.0
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
