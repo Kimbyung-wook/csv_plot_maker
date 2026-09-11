@@ -29,22 +29,29 @@ def _format_transform_number(value: float) -> str:
     return f"{value:g}"
 
 
-def _legend_name(series: Series) -> str:
+def _legend_name(series: Series, label_prefix: str = "") -> str:
     """The legend entry text for one series: just the column name at the
     default scale=1/offset=0, or the column name plus a short summary of
     the applied linear transform (transformed = raw * scale + offset)
     otherwise -- so a viewer can tell a curve isn't showing raw values
     without having to reopen the style panel.
+
+    `label_prefix` (e.g. "flight1.csv: ") is prepended whenever the owning
+    subplot mixes series from more than one open file -- see
+    MainWindow._legend_prefix_for -- and left empty (the common case) when
+    every series in that subplot comes from the same file.
     """
     if series.scale == 1.0 and series.offset == 0.0:
-        return series.y_column
-    bits = []
-    if series.scale != 1.0:
-        bits.append(f"×{_format_transform_number(series.scale)}")
-    if series.offset != 0.0:
-        sign = "+" if series.offset >= 0 else "−"
-        bits.append(f"{sign}{_format_transform_number(abs(series.offset))}")
-    return f"{series.y_column} ({' '.join(bits)})"
+        base = series.y_column
+    else:
+        bits = []
+        if series.scale != 1.0:
+            bits.append(f"×{_format_transform_number(series.scale)}")
+        if series.offset != 0.0:
+            sign = "+" if series.offset >= 0 else "−"
+            bits.append(f"{sign}{_format_transform_number(abs(series.offset))}")
+        base = f"{series.y_column} ({' '.join(bits)})"
+    return f"{label_prefix}{base}"
 
 
 class _ScalableItemSample(pg.ItemSample):
@@ -157,7 +164,7 @@ class SubplotView:
         self.right_vb.setGeometry(self.plot_item.vb.sceneBoundingRect())
         self.right_vb.linkedViewChanged(self.plot_item.vb, self.right_vb.XAxis)
 
-    def set_series_data(self, series: Series, x: np.ndarray, y: np.ndarray) -> None:
+    def set_series_data(self, series: Series, x: np.ndarray, y: np.ndarray, label_prefix: str = "") -> None:
         curve = self._curves.get(series.id)
         if curve is not None and self._curve_axis.get(series.id) != series.axis:
             # axis reassigned: the curve must move to the other ViewBox.
@@ -167,7 +174,7 @@ class SubplotView:
         if curve is None:
             pen = make_pen(series)
             sym = symbol_kwargs(series)
-            name = _legend_name(series)
+            name = _legend_name(series, label_prefix)
             curve = pg.PlotDataItem(x, y, pen=pen, name=name, **sym)
             self._curve_legend_names[series.id] = name
             if series.axis == "secondary":
@@ -193,14 +200,14 @@ class SubplotView:
         else:
             curve.setData(x, y)
             self._apply_style(curve, series)
-            self._sync_legend_name(series)
+            self._sync_legend_name(series, label_prefix)
 
-    def _sync_legend_name(self, series: Series) -> None:
+    def _sync_legend_name(self, series: Series, label_prefix: str = "") -> None:
         curve = self._curves.get(series.id)
         legend = self.plot_item.legend
         if curve is None or legend is None:
             return
-        name = _legend_name(series)
+        name = _legend_name(series, label_prefix)
         if self._curve_legend_names.get(series.id) == name:
             return
         self._curve_legend_names[series.id] = name
@@ -226,6 +233,32 @@ class SubplotView:
             else:
                 self.plot_item.removeItem(curve)
             self._update_right_axis_visibility()
+
+    def get_x_range(self) -> tuple[float, float]:
+        lo, hi = self.plot_item.vb.viewRange()[0]
+        return (lo, hi)
+
+    def get_y_range(self, secondary: bool = False) -> tuple[float, float]:
+        vb = self.right_vb if secondary else self.plot_item.vb
+        lo, hi = vb.viewRange()[1]
+        return (lo, hi)
+
+    def set_x_range(self, x_min: float, x_max: float, padding: float = 0.0) -> None:
+        self.plot_item.setXRange(x_min, x_max, padding=padding)
+
+    def set_y_range(self, y_min: float, y_max: float, secondary: bool = False, padding: float = 0.0) -> None:
+        if secondary:
+            self.right_vb.setYRange(y_min, y_max, padding=padding)
+        else:
+            self.plot_item.setYRange(y_min, y_max, padding=padding)
+
+    def set_bottom_label(self, x_label: str) -> None:
+        """Just the bottom-axis title, without touching left/right -- for
+        MainWindow._sync_x_axis_titles, which re-evaluates every subplot's
+        title on each replot and would otherwise have to resend the (already
+        current) Y labels too just to reach this one.
+        """
+        self.plot_item.setLabel("bottom", x_label)
 
     def set_labels(self, x_label: str, y_label_left: str, y_label_right: str = "") -> None:
         self.plot_item.setLabel("bottom", x_label)
@@ -373,12 +406,33 @@ class SubplotView:
     def teardown(self) -> None:
         """Release the secondary ViewBox before this SubplotView is discarded.
 
+        Undoes __init__'s setup in reverse order:
+
+        1. clear() every curve -- including ones parented under right_vb --
+           so none are left dangling off it once it's gone.
+        2. setXLink(None) to undo right_vb.setXLink(plot_item) from
+           __init__: pyqtgraph's linkView() wires sigResized/range-changed
+           signal connections *from* plot_item.vb *to* right_vb's own bound
+           methods, which otherwise keeps right_vb alive (and reachable from
+           a still-live plot_item.vb) after this SubplotView's own
+           references to it are dropped.
+        3. disconnect our own sigResized hookup.
+        4. remove right_vb from the scene.
+
         right_vb was added directly to the scene (see __init__) rather than
         parented under plot_item, so plot_item's own removal from the scene
         (PlotGridWidget.rebuild -> GraphicsLayout.clear) does not take it or
-        any curves still attached to it along -- without this, they leak as
-        a permanent ghost/afterimage on the next grid rebuild.
+        any curves still attached to it along. Skipping any of the steps
+        above leaves right_vb's Python object reachable (and thus not yet
+        garbage-collected) through one of these live Qt-side connections
+        right up until plot_item.vb itself is torn down -- at which point
+        both can end up deleted in an order Python's refcounting doesn't
+        control, and a paint/layout event already queued for right_vb that
+        arrives after Python has dropped it raises "libshiboken: Internal
+        C++ object (ViewBox) already deleted" instead of a clean teardown.
         """
+        self.clear()
+        self.right_vb.setXLink(None)
         self.plot_item.vb.sigResized.disconnect(self._sync_right_view_geometry)
         scene = self.plot_item.scene()
         if scene is not None:

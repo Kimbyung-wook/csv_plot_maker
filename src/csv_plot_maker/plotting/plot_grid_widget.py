@@ -17,7 +17,7 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
     """
 
     subplot_clicked = Signal(int, int)  # row, col
-    column_dropped = Signal(int, int, str)  # row, col, column name
+    column_dropped = Signal(int, int, str, str)  # row, col, source_id, column name
     axis_label_double_clicked = Signal(int, int, str)  # row, col, "bottom"/"left"/"right"
 
     # Always-reserved px of room for a Y-axis title, whether or not a
@@ -33,7 +33,7 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
         self._background = "w"
         self._foreground = "k"
         self._legend_font_pt = 9
-        self._link_x_axes = False
+        self._linked_rcs: set[tuple[int, int]] = set()
         self._syncing_x_range = False
         # Coalesces bursts of data/label changes (one per subplot on a grid
         # rebuild, one per replot, etc.) into a single re-sync on the next
@@ -282,28 +282,36 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
     def views(self) -> dict[tuple[int, int], SubplotView]:
         return dict(self._views)
 
-    def set_link_x_axes(self, enabled: bool) -> None:
-        """When enabled, panning/zooming any subplot's X axis applies the same
-        X range to every other subplot (their own Y axes are left untouched).
+    def set_linked_views(self, linked_rcs: set[tuple[int, int]]) -> None:
+        """`linked_rcs`: the (row, col) positions whose X pan/zoom should be
+        kept in sync with each other -- an opt-in subset, not "all or
+        nothing": positions outside this set are left completely independent,
+        even while other subplots are linked. Called again whenever which
+        subplots are linked changes (a toggle, a subplot added/removed, a
+        grid resize, a layout load).
         """
-        self._link_x_axes = enabled
-        if enabled and self._views:
-            reference_view = next(iter(self._views.values()))
-            x_range = reference_view.plot_item.vb.viewRange()[0]
-            self._broadcast_x_range(None, x_range)
+        self._linked_rcs = set(linked_rcs)
+        if len(self._linked_rcs) > 1:
+            reference_rc = next(iter(self._linked_rcs))
+            reference_view = self._views.get(reference_rc)
+            if reference_view is not None:
+                x_range = reference_view.plot_item.vb.viewRange()[0]
+                self._broadcast_x_range(reference_rc, x_range)
 
     def _on_view_x_range_changed(self, rc: tuple[int, int], x_range) -> None:
-        if not self._link_x_axes or self._syncing_x_range:
+        if rc not in self._linked_rcs or self._syncing_x_range:
             return
         self._broadcast_x_range(rc, x_range)
 
     def _broadcast_x_range(self, source_rc: tuple[int, int] | None, x_range) -> None:
         self._syncing_x_range = True
         try:
-            for rc, view in self._views.items():
+            for rc in self._linked_rcs:
                 if rc == source_rc:
                     continue
-                view.plot_item.setXRange(*x_range, padding=0)
+                view = self._views.get(rc)
+                if view is not None:
+                    view.plot_item.setXRange(*x_range, padding=0)
         finally:
             self._syncing_x_range = False
 
@@ -362,11 +370,12 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
 
     def dropEvent(self, event) -> None:
         # A multi-selected drag (Ctrl/Shift-click in the column list) carries
-        # every selected column name, one per line -- add them all at once.
-        columns = [c for c in event.mimeData().text().split("\n") if c]
+        # one "source_id\tcolumn_name" pair per line -- add them all at once.
+        lines = [line for line in event.mimeData().text().split("\n") if line]
         scene_pos = self.mapToScene(event.position().toPoint())
         rc = self._view_at_scene_pos(scene_pos)
-        if rc is not None and columns:
-            for column in columns:
-                self.column_dropped.emit(rc[0], rc[1], column)
+        if rc is not None and lines:
+            for line in lines:
+                source_id, _sep, column = line.partition("\t")
+                self.column_dropped.emit(rc[0], rc[1], source_id, column)
             event.acceptProposedAction()

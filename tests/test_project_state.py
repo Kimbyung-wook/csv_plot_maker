@@ -1,12 +1,6 @@
 from csv_plot_maker.models.project import ProjectState
 
 
-def test_build_default_grid_subplots_default_to_zero_x_offset():
-    proj = ProjectState(grid_rows=1, grid_cols=1)
-    proj.build_default_grid()
-    assert proj.subplots[0].x_offset == 0.0
-
-
 def test_build_default_grid_subplots_default_to_no_saved_y_range():
     proj = ProjectState(grid_rows=1, grid_cols=1)
     proj.build_default_grid()

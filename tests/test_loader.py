@@ -13,6 +13,7 @@ INTEGERS_FIXTURE = Path(__file__).parent / "fixtures" / "integers.csv"
 RAGGED_FIXTURE = Path(__file__).parent / "fixtures" / "ragged.csv"
 TIME_STRING_FIXTURE = Path(__file__).parent / "fixtures" / "time_string.csv"
 SPARSE_NUMERIC_FIXTURE = Path(__file__).parent / "fixtures" / "sparse_numeric.csv"
+HUGE_INTEGERS_FIXTURE = Path(__file__).parent / "fixtures" / "huge_integers.csv"
 
 
 def test_peek_schema_returns_column_names():
@@ -173,6 +174,24 @@ def test_load_csv_does_not_retry_on_memory_error():
         with pytest.raises(MemoryError):
             load_csv(str(FIXTURE))
     assert mock_read.call_count == 1
+
+
+def test_load_csv_handles_columns_beyond_int64_range():
+    # A value beyond Int64's range (e.g. a raw counter overflowing into the
+    # UInt64 range) makes polars infer Int128 for the whole column -- and
+    # polars' numpy interop has no conversion for that dtype: Series.to_numpy()
+    # panics natively (pyo3_runtime.PanicException, not a catchable Python
+    # exception) rather than raising. Before this was special-cased, that
+    # panic escaped load_csv() entirely, and since it isn't an Exception
+    # subclass, CallableWorker's try/except never saw it either -- so a real
+    # multi-CSV session loading a file with a column like this got a "Loading
+    # ..." progress dialog that never closed (see CallableWorker.run() and its
+    # comment for the other half of this fix).
+    store = load_csv(str(HUGE_INTEGERS_FIXTURE))
+    assert store.numeric["huge"] is True
+    arr = store.get("huge")
+    assert arr.dtype == np.float64
+    assert arr.tolist() == [0.0, 18446744073709551614.0]
 
 
 def test_load_csv_still_retries_on_schema_error():

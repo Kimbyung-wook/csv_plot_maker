@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -45,15 +46,21 @@ class StylePanel(QWidget):
     """Bottom of the merged config panel: appears only once a Y series is selected.
 
     Holds live color/line-style/marker/width controls, the primary/secondary
-    Y-axis assignment, and the "Remove Series" action for the selected series.
-    Every control edit fires immediately (no Apply button) so the caller can
-    push the new values to the plotted curve via a cheap setPen/setSymbol
-    call, per the "dynamic line style" requirement.
+    Y-axis assignment, the selected series' own X column/offset (X is a
+    per-series property so a subplot can mix series from more than one file
+    -- see Series.x_column), and the "Remove Series" action. Every control
+    edit fires immediately (no Apply button) so the caller can push the new
+    values to the plotted curve via a cheap setPen/setSymbol call, per the
+    "dynamic line style" requirement.
     """
 
     style_changed = Signal()
     axis_changed = Signal(str)  # "primary" or "secondary"
     transform_changed = Signal()  # scale and/or offset edited
+    x_column_changed = Signal(str)  # column name, within the series' own source
+    x_offset_changed = Signal(float)
+    zero_at_start_requested = Signal()
+    apply_x_to_matching_requested = Signal()
     remove_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -62,6 +69,7 @@ class StylePanel(QWidget):
         self._color = "#1f77b4"
         self._updating = False
         self._updating_axis = False
+        self._updating_x_column = False
 
         self.axis_label = QLabel("Y axis:")
         self.axis_combo = QComboBox()
@@ -98,7 +106,21 @@ class StylePanel(QWidget):
         self.offset_spin.setSingleStep(1.0)
         self.offset_spin.setValue(0.0)
 
+        # This series' own X column -- always one of its own file's columns
+        # (see Series.x_column), so a subplot mixing series from more than
+        # one file still plots each one against data of the same length.
+        self.x_combo = QComboBox()
+        self.x_offset_spin = DefaultingDoubleSpinBox(default=0.0)
+        self.x_offset_spin.setRange(-1e12, 1e12)
+        self.x_offset_spin.setDecimals(3)
+        self.zero_at_start_button = QPushButton("Zero at start")
+        self.apply_x_to_matching_button = QPushButton("Set All to X column config")
+
         self.remove_button = QPushButton("Remove Series")
+
+        x_offset_layout = QHBoxLayout()
+        x_offset_layout.addWidget(self.x_offset_spin, 1)
+        x_offset_layout.addWidget(self.zero_at_start_button)
 
         form = QFormLayout()
         form.addRow(self.axis_label, self.axis_combo)
@@ -108,10 +130,13 @@ class StylePanel(QWidget):
         form.addRow("Width:", self.width_spin)
         form.addRow("Scale:", self.scale_spin)
         form.addRow("Offset:", self.offset_spin)
+        form.addRow("X column:", self.x_combo)
+        form.addRow("X offset:", x_offset_layout)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Series style"))
         layout.addLayout(form)
+        layout.addWidget(self.apply_x_to_matching_button)
         layout.addWidget(self.remove_button)
 
         self.axis_combo.currentIndexChanged.connect(self._on_axis_changed)
@@ -121,12 +146,31 @@ class StylePanel(QWidget):
         self.width_spin.valueChanged.connect(self._emit_changed)
         self.scale_spin.valueChanged.connect(self._emit_transform_changed)
         self.offset_spin.valueChanged.connect(self._emit_transform_changed)
+        self.x_combo.currentTextChanged.connect(self._on_x_column_changed)
+        self.x_offset_spin.valueChanged.connect(self.x_offset_changed)
+        self.zero_at_start_button.clicked.connect(self.zero_at_start_requested)
+        self.apply_x_to_matching_button.clicked.connect(self.apply_x_to_matching_requested)
         self.remove_button.clicked.connect(lambda: self.remove_requested.emit())
 
         self.setVisible(False)  # nothing shown until a series is selected
 
-    def set_series(self, series: Series | None, series_count: int = 0) -> None:
+    def _set_x_options(self, column_names: list[str]) -> None:
+        self.x_combo.clear()
+        self.x_combo.addItems(column_names)
+
+    def set_x_offset(self, value: float) -> None:
+        self.x_offset_spin.blockSignals(True)
+        self.x_offset_spin.setValue(value)
+        self.x_offset_spin.blockSignals(False)
+
+    def set_series(self, series: Series | None, series_count: int = 0, x_options: list[str] = ()) -> None:
         """series_count: how many series the owning subplot has in total.
+
+        `x_options`: the selected series' own file's numeric columns, so its
+        current x_column can be found among them -- scoped and passed in by
+        the caller together with `series` (rather than via a separate call
+        the caller must remember to make first) since X must always come
+        from that series' own source.
 
         The primary/secondary axis picker is shown once there's more than
         one series to split across axes, OR the selected series is already
@@ -136,6 +180,7 @@ class StylePanel(QWidget):
         """
         self._updating = True
         self._updating_axis = True
+        self._updating_x_column = True
         if series is None:
             self.setVisible(False)
         else:
@@ -154,8 +199,13 @@ class StylePanel(QWidget):
             show_axis_picker = series_count > 1 or series.axis == "secondary"
             self.axis_label.setVisible(show_axis_picker)
             self.axis_combo.setVisible(show_axis_picker)
+            self._set_x_options(list(x_options))
+            if series.x_column:
+                self.x_combo.setCurrentText(series.x_column)
+            self.set_x_offset(series.x_offset)
         self._updating = False
         self._updating_axis = False
+        self._updating_x_column = False
 
     def current_color(self) -> str:
         return self._color
@@ -199,3 +249,8 @@ class StylePanel(QWidget):
         axis = self.axis_combo.itemData(index)
         if axis:
             self.axis_changed.emit(axis)
+
+    def _on_x_column_changed(self, text: str) -> None:
+        if self._updating_x_column or not text:
+            return
+        self.x_column_changed.emit(text)

@@ -1,22 +1,18 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QMimeData, Qt, Signal
-from PySide6.QtGui import QDrag, QKeySequence
+from PySide6.QtGui import QColor, QDrag, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
-    QHBoxLayout,
-    QLabel,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 _Y_COLUMN_ROLE = Qt.ItemDataRole.UserRole + 1
+_SOURCE_ID_ROLE = Qt.ItemDataRole.UserRole + 2
 
 
 class SeriesListWidget(QListWidget):
@@ -25,13 +21,14 @@ class SeriesListWidget(QListWidget):
 
     Ctrl-click toggles a row, Shift-click selects a contiguous range, and
     Ctrl+A selects every row -- all native to ExtendedSelection. Dragging
-    (press-and-move) a selected row exports its column name(s) as plain-text
-    MIME data, same convention as the Data tab's DraggableColumnList, so
-    PlotGridWidget.dropEvent() handles a drop from either source identically.
-    Deliberately does *not* extend the selection while dragging (Qt's default
-    for ExtendedSelection without drag support) -- once setDragEnabled(True)
-    is on, a press-and-move on a selected row starts a drag instead, which is
-    what makes the list a usable drag source in the first place.
+    (press-and-move) a selected row exports its "source_id\tcolumn_name"
+    pair(s) as plain-text MIME data, same convention as the Data tab's
+    DraggableColumnList, so PlotGridWidget.dropEvent() handles a drop from
+    either source identically. Deliberately does *not* extend the selection
+    while dragging (Qt's default for ExtendedSelection without drag support)
+    -- once setDragEnabled(True) is on, a press-and-move on a selected row
+    starts a drag instead, which is what makes the list a usable drag source
+    in the first place.
 
     Delete/Backspace deletes every selected row, not just the current one.
     """
@@ -57,103 +54,78 @@ class SeriesListWidget(QListWidget):
         if not items:
             return
         mime = QMimeData()
-        mime.setText("\n".join(item.data(_Y_COLUMN_ROLE) for item in items))
+        mime.setText(
+            "\n".join(f"{item.data(_SOURCE_ID_ROLE)}\t{item.data(_Y_COLUMN_ROLE)}" for item in items)
+        )
         drag = QDrag(self)
         drag.setMimeData(mime)
         drag.exec(Qt.DropAction.CopyAction)
 
 
 class SeriesPanel(QWidget):
-    """Middle of the merged config panel: the active subplot's X column and Y series.
+    """Middle of the merged config panel: the active subplot's Y series.
 
     Series are no longer added here via a combo+button -- drag a column from
     the Data tab onto a subplot in the plot grid instead. This panel just
     lists what's already there and reports selection so the style section
-    below can edit it. The selected series can also be removed with the
-    Delete key, not just the Style section's Remove Series button.
+    below can edit it (including, per series, which of its own file's
+    columns to use as X -- see StylePanel). The selected series can also be
+    removed with the Delete key, not just the Style section's Remove Series
+    button.
 
     Duplicate column selection is allowed by design: series are identified by
     a generated id, not by column name, so the same Y column can be added
     more than once (e.g. with different styles).
     """
 
-    x_column_changed = Signal(str)
-    x_offset_changed = Signal(float)
-    zero_at_start_requested = Signal()
-    apply_x_to_all_requested = Signal()
     series_selection_changed = Signal(str)  # series id, "" when nothing selected
     series_delete_requested = Signal(str)  # series id
     legend_toggled = Signal(bool)
+    link_x_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
-        self.x_combo = QComboBox()
-        self.x_offset_spin = QDoubleSpinBox()
-        self.x_offset_spin.setRange(-1e12, 1e12)
-        self.x_offset_spin.setDecimals(3)
-        self.zero_at_start_button = QPushButton("Zero at start")
-        self.apply_x_to_all_button = QPushButton("Apply X Column && Offset to All Subplots")
         self.series_list = SeriesListWidget()
         self.legend_checkbox = QCheckBox("Show Legend")
         self.legend_checkbox.setChecked(True)
-
-        offset_layout = QHBoxLayout()
-        offset_layout.addWidget(QLabel("X offset:"))
-        offset_layout.addWidget(self.x_offset_spin, 1)
-        offset_layout.addWidget(self.zero_at_start_button)
+        self.link_x_checkbox = QCheckBox("Link X axis with other linked subplots")
+        self.link_x_checkbox.setToolTip(
+            "When checked, panning/zooming this subplot's X axis stays in sync with every "
+            "other subplot that also has this checked -- subplots without it are unaffected."
+        )
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("X column:"))
-        layout.addWidget(self.x_combo)
-        layout.addLayout(offset_layout)
-        layout.addWidget(self.apply_x_to_all_button)
         layout.addWidget(self.legend_checkbox)
-
-        layout.addWidget(QLabel("Y series in this subplot:"))
+        layout.addWidget(self.link_x_checkbox)
         layout.addWidget(self.series_list, 1)
 
-        self.x_combo.currentTextChanged.connect(self._on_x_changed)
-        self.x_offset_spin.valueChanged.connect(self.x_offset_changed)
-        self.zero_at_start_button.clicked.connect(self.zero_at_start_requested)
-        self.apply_x_to_all_button.clicked.connect(self.apply_x_to_all_requested)
         self.series_list.currentItemChanged.connect(self._on_selection_changed)
         self.series_list.delete_requested.connect(self._on_delete_requested)
         self.legend_checkbox.toggled.connect(self.legend_toggled)
-
-    def set_columns(self, names: list[str]) -> None:
-        current = self.x_combo.currentText()
-        self.x_combo.blockSignals(True)
-        self.x_combo.clear()
-        self.x_combo.addItems(names)
-        if current in names:
-            self.x_combo.setCurrentText(current)
-        self.x_combo.blockSignals(False)
-
-    def set_x_column(self, name: str | None) -> None:
-        if name:
-            self.x_combo.blockSignals(True)
-            self.x_combo.setCurrentText(name)
-            self.x_combo.blockSignals(False)
-
-    def set_x_offset(self, value: float) -> None:
-        self.x_offset_spin.blockSignals(True)
-        self.x_offset_spin.setValue(value)
-        self.x_offset_spin.blockSignals(False)
+        self.link_x_checkbox.toggled.connect(self.link_x_toggled)
 
     def set_show_legend(self, visible: bool) -> None:
         self.legend_checkbox.blockSignals(True)
         self.legend_checkbox.setChecked(visible)
         self.legend_checkbox.blockSignals(False)
 
-    def refresh_series_list(self, series_items: list[tuple[str, str, str]]) -> None:
-        """series_items: list of (series_id, y_column, display_text)."""
+    def set_link_x_axis(self, enabled: bool) -> None:
+        self.link_x_checkbox.blockSignals(True)
+        self.link_x_checkbox.setChecked(enabled)
+        self.link_x_checkbox.blockSignals(False)
+
+    def refresh_series_list(self, series_items: list[tuple[str, str, str, str, str]]) -> None:
+        """series_items: list of (series_id, source_id, y_column, display_text, bg_color)."""
         self.series_list.blockSignals(True)
         self.series_list.clear()
-        for series_id, y_column, text in series_items:
+        for series_id, source_id, y_column, text, bg_color in series_items:
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, series_id)
+            item.setData(_SOURCE_ID_ROLE, source_id)
             item.setData(_Y_COLUMN_ROLE, y_column)
+            if bg_color:
+                item.setBackground(QColor(bg_color))
             self.series_list.addItem(item)
         self.series_list.blockSignals(False)
 
@@ -167,10 +139,6 @@ class SeriesPanel(QWidget):
     def selected_series_id(self) -> str:
         item = self.series_list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else ""
-
-    def _on_x_changed(self, name: str) -> None:
-        if name:
-            self.x_column_changed.emit(name)
 
     def _on_selection_changed(self, current, _previous) -> None:
         series_id = current.data(Qt.ItemDataRole.UserRole) if current else ""

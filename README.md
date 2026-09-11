@@ -1,6 +1,6 @@
 # CSV Plot Maker
 
-CSV 데이터를 불러와 여러 개의 subplot으로 구성된 그래프를 그리는 데스크톱 분석 도구입니다. 컬럼을 여러 subplot에 중복 선택해 시리즈로 추가하고, 시리즈별 색상/선모양/마커/굵기를 즉시 바꾸고, subplot마다 이중 Y축과 축 라벨을 설정할 수 있습니다. 수십만~수백만 행 규모의 CSV도 빠르게 로딩·렌더링하도록 만들어졌습니다.
+CSV 데이터를 불러와 여러 개의 subplot으로 구성된 그래프를 그리는 데스크톱 분석 도구입니다. 여러 CSV 파일을 동시에 열어 파일별로 색이 구분된 데이터를 한 subplot에도 자유롭게 섞어 비교할 수 있고, 컬럼을 여러 subplot에 중복 선택해 시리즈로 추가하고, 시리즈별 색상/선모양/마커/굵기를 즉시 바꾸고, subplot마다 이중 Y축과 축 라벨을 설정할 수 있습니다. 수십만~수백만 행 규모의 CSV도 빠르게 로딩·렌더링하도록 만들어졌습니다.
 
 **프로그램 사용 방법(화면 구성, CSV 불러오기, 데이터 추가, 축/스타일 설정, 레이아웃 저장 등)은 [howtouse.md](howtouse.md)를 참고하세요.** 전체 요구사항과 설계 배경은 [DESIGN.md](DESIGN.md)를 참고하세요.
 
@@ -61,15 +61,16 @@ uv run pyinstaller --name "CSV Plot Maker" --windowed --onedir --noconfirm --cle
 ```
 src/csv_plot_maker/
   main.py                    # QApplication 진입점
-  _version.py                # 창 제목에 표시되는 버전/빌드일자
+  _version.py                # 창 제목에 표시되는 버전/빌드일자, Info 메뉴 버전 히스토리 목록
   data/
     loader.py                 # polars 기반 CSV 로딩 (스키마 peek + 백그라운드 전체 로드)
     column_store.py           # 컬럼별 numpy 배열 캐시
   models/
-    series.py                 # Series: 컬럼, 축, 스타일
-    subplot.py                # SubplotConfig: subplot 하나의 설정
-    project.py                # ProjectState: 전체 프로젝트 상태
-    serialization.py          # 레이아웃 JSON 저장/불러오기
+    data_source.py             # DataSource/SourceRef: 열려 있는 CSV 파일 하나의 정체성(경로/닉네임/색상)
+    series.py                  # Series: Y 컬럼, 자기 파일 기준 X 컬럼/오프셋, 축, 스타일
+    subplot.py                 # SubplotConfig: subplot 하나의 설정(라벨, Y 범위, 시리즈 목록)
+    project.py                 # ProjectState: 전체 프로젝트 상태, 열린 파일 목록·정합성 관리
+    serialization.py           # 레이아웃 JSON 저장/불러오기 (구버전 레이아웃 마이그레이션 포함)
   ui/                          # 좌측 CSV 패널, 우측 설정 패널 등 Qt 위젯
   plotting/                    # pyqtgraph 기반 subplot grid 렌더링
   utils/

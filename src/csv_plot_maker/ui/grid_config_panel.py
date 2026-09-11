@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -25,7 +24,6 @@ class GridConfigPanel(QWidget):
     active_subplot_changed = Signal(str)  # subplot id
     clear_subplot_requested = Signal()
     clear_all_requested = Signal()
-    link_x_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -43,18 +41,12 @@ class GridConfigPanel(QWidget):
         self.clear_subplot_button = QPushButton("Clear This Subplot")
         self.clear_all_button = QPushButton("Clear All Subplots")
 
-        self.link_x_checkbox = QCheckBox("Link X axis across subplots")
-        self.link_x_checkbox.setToolTip(
-            "When checked, panning/zooming the X axis in one subplot applies the same X range to every other subplot."
-        )
-
         form = QFormLayout()
         form.addRow("Rows:", self.rows_spin)
         form.addRow("Cols:", self.cols_spin)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
-        layout.addWidget(self.link_x_checkbox)
         layout.addWidget(QLabel("Active subplot:"))
         layout.addWidget(self.active_combo)
 
@@ -68,7 +60,6 @@ class GridConfigPanel(QWidget):
         self.active_combo.currentIndexChanged.connect(self._on_active_changed)
         self.clear_subplot_button.clicked.connect(self.clear_subplot_requested)
         self.clear_all_button.clicked.connect(self.clear_all_requested)
-        self.link_x_checkbox.toggled.connect(self.link_x_toggled)
 
     def _on_dims_changed(self, _value: int) -> None:
         self.grid_dims_changed.emit(self.rows_spin.value(), self.cols_spin.value())
@@ -94,11 +85,6 @@ class GridConfigPanel(QWidget):
             self.active_combo.blockSignals(True)
             self.active_combo.setCurrentIndex(idx)
             self.active_combo.blockSignals(False)
-
-    def set_link_x_axes(self, enabled: bool) -> None:
-        self.link_x_checkbox.blockSignals(True)
-        self.link_x_checkbox.setChecked(enabled)
-        self.link_x_checkbox.blockSignals(False)
 
     def sync_grid_spins(self, rows: int, cols: int) -> None:
         self.rows_spin.blockSignals(True)

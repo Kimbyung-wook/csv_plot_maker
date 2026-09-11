@@ -7,57 +7,8 @@ from PySide6.QtWidgets import QAbstractItemView
 from csv_plot_maker.ui.series_panel import SeriesPanel
 
 
-def test_x_offset_spin_emits_x_offset_changed(qtbot):
-    panel = SeriesPanel()
-    qtbot.addWidget(panel)
-
-    received = []
-    panel.x_offset_changed.connect(received.append)
-
-    panel.x_offset_spin.setValue(12.5)
-
-    assert received == [12.5]
-
-
-def test_zero_at_start_button_emits_request(qtbot):
-    panel = SeriesPanel()
-    qtbot.addWidget(panel)
-
-    received = []
-    panel.zero_at_start_requested.connect(lambda: received.append(True))
-
-    panel.zero_at_start_button.click()
-
-    assert received == [True]
-
-
-def test_apply_x_to_all_button_emits_request(qtbot):
-    panel = SeriesPanel()
-    qtbot.addWidget(panel)
-
-    received = []
-    panel.apply_x_to_all_requested.connect(lambda: received.append(True))
-
-    panel.apply_x_to_all_button.click()
-
-    assert received == [True]
-
-
-def test_set_x_offset_updates_spin_without_emitting(qtbot):
-    panel = SeriesPanel()
-    qtbot.addWidget(panel)
-
-    received = []
-    panel.x_offset_changed.connect(received.append)
-
-    panel.set_x_offset(-3.0)
-
-    assert panel.x_offset_spin.value() == -3.0
-    assert received == []
-
-
 def _add_series_items(panel: SeriesPanel, ids: list[str]) -> None:
-    panel.refresh_series_list([(series_id, series_id, series_id) for series_id in ids])
+    panel.refresh_series_list([(series_id, "src", series_id, series_id, "") for series_id in ids])
 
 
 def test_series_list_uses_extended_selection_mode(qtbot):
@@ -105,8 +56,8 @@ def test_drag_exports_the_y_column_of_every_selected_series(qtbot):
     qtbot.addWidget(panel)
     panel.refresh_series_list(
         [
-            ("id1", "temp", "temp  [primary]"),
-            ("id2", "pressure", "pressure  [secondary]"),
+            ("id1", "src1", "temp", "temp  [primary]", ""),
+            ("id2", "src2", "pressure", "pressure  [secondary]", ""),
         ]
     )
     panel.series_list.item(0).setSelected(True)
@@ -117,7 +68,7 @@ def test_drag_exports_the_y_column_of_every_selected_series(qtbot):
         mock_drag_cls.return_value.setMimeData.side_effect = lambda mime: captured.update(text=mime.text())
         panel.series_list.startDrag(Qt.DropAction.CopyAction)
 
-    assert captured["text"] == "temp\npressure"
+    assert captured["text"] == "src1\ttemp\nsrc2\tpressure"
 
 
 def test_click_drag_does_not_extend_the_selection(qtbot):
@@ -126,7 +77,9 @@ def test_click_drag_does_not_extend_the_selection(qtbot):
     # "extend selection while dragging" behavior for ExtendedSelection.
     panel = SeriesPanel()
     qtbot.addWidget(panel)
-    panel.refresh_series_list([("id1", "a", "a"), ("id2", "b", "b"), ("id3", "c", "c")])
+    panel.refresh_series_list(
+        [("id1", "src", "a", "a", ""), ("id2", "src", "b", "b", ""), ("id3", "src", "c", "c", "")]
+    )
     panel.show()
     qtbot.waitExposed(panel)
     list_widget = panel.series_list

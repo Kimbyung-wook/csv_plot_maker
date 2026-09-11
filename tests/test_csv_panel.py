@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox
 
+from csv_plot_maker.models.data_source import DataSource
 from csv_plot_maker.ui.csv_panel import CsvPanel
 
 FIXTURE = Path(__file__).parent / "fixtures" / "small.csv"
@@ -61,7 +62,8 @@ def test_load_path_applies_header_trim_keywords_end_to_end(qtbot):
     with qtbot.waitSignal(panel.csv_loaded, timeout=5000) as blocker:
         panel.load_path(str(FIXTURE))
 
-    store = blocker.args[0]
+    source = blocker.args[0]
+    store = source.store
     assert "el" in store.dtypes
     assert "label" not in store.dtypes
     column_list_names = [panel.column_list.item(i).text() for i in range(panel.column_list.count())]
@@ -71,7 +73,7 @@ def test_load_path_applies_header_trim_keywords_end_to_end(qtbot):
 def test_header_trim_dialog_reloads_the_open_csv_when_keywords_changed(qtbot):
     panel = CsvPanel()
     qtbot.addWidget(panel)
-    panel._current_path = "dummy.csv"
+    panel._sources["src1"] = DataSource(id="src1", path="dummy.csv", label="dummy", color="#dbeafe")
     panel._header_trim_keywords = ["foo"]
 
     with patch("csv_plot_maker.ui.csv_panel.HeaderTrimDialog") as mock_dialog_cls:
@@ -81,7 +83,7 @@ def test_header_trim_dialog_reloads_the_open_csv_when_keywords_changed(qtbot):
             panel._on_header_trim_clicked()
 
     assert panel._header_trim_keywords == ["foo", "bar"]
-    mock_load_path.assert_called_once_with("dummy.csv")
+    mock_load_path.assert_called_once_with("dummy.csv", source_id="src1")
 
 
 def test_header_trim_dialog_does_not_reload_when_keywords_unchanged(qtbot):
@@ -102,7 +104,7 @@ def test_header_trim_dialog_does_not_reload_when_keywords_unchanged(qtbot):
 def test_header_trim_dialog_does_not_reload_when_no_csv_is_open(qtbot):
     panel = CsvPanel()
     qtbot.addWidget(panel)
-    assert panel._current_path is None
+    assert panel._sources == {}
     panel._header_trim_keywords = []
 
     with patch("csv_plot_maker.ui.csv_panel.HeaderTrimDialog") as mock_dialog_cls:
@@ -126,6 +128,159 @@ def test_ctrl_a_does_not_select_all_columns(qtbot):
     QTest.keyClick(panel.column_list, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
 
     assert len(panel.column_list.selectedItems()) == 0
+
+
+def test_single_open_file_hides_its_header_and_column_color(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt", "spd"])
+
+    panel._sync_group_chrome()
+
+    header = panel.column_list.item(0)
+    assert header.isHidden() is True
+    for row in (1, 2):
+        assert panel.column_list.item(row).background().style() == Qt.BrushStyle.NoBrush
+
+
+def test_second_open_file_reveals_both_headers_and_colors(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source_a = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    source_b = DataSource(id="b", path="b.csv", label="b", color="#dcfce7")
+    panel._sources["a"] = source_a
+    panel._sources["b"] = source_b
+    panel.column_list.set_source_group(source_a, ["alt"])
+    panel.column_list.set_source_group(source_b, ["spd"])
+
+    panel._sync_group_chrome()
+
+    headers = [panel.column_list.item(row) for row in range(panel.column_list.count()) if panel.column_list.item(row).text().startswith("▾")]
+    assert len(headers) == 2
+    assert all(h.isHidden() is False for h in headers)
+
+
+def test_closing_back_down_to_one_file_hides_chrome_again(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source_a = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    source_b = DataSource(id="b", path="b.csv", label="b", color="#dcfce7")
+    panel._sources["a"] = source_a
+    panel._sources["b"] = source_b
+    panel.column_list.set_source_group(source_a, ["alt"])
+    panel.column_list.set_source_group(source_b, ["spd"])
+    panel._sync_group_chrome()
+
+    panel.close_source("b")
+
+    remaining_header = next(
+        panel.column_list.item(row)
+        for row in range(panel.column_list.count())
+        if panel.column_list.item(row).text().startswith("▾")
+    )
+    assert remaining_header.isHidden() is True
+
+
+def test_rename_source_updates_label_and_header_text(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path=r"C:\very\long\path\flight_recorder_export_2026.csv", label="flight_recorder_export_2026", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt", "spd"])
+
+    received = []
+    panel.source_renamed.connect(received.append)
+    with patch("csv_plot_maker.ui.csv_panel.QInputDialog.getText", return_value=("flight1", True)):
+        panel._rename_source("a")
+
+    assert source.label == "flight1"
+    assert panel.column_list.item(0).text() == "\u25be flight1"
+    assert received == ["a"]
+    assert "flight1" in panel.path_label.text()
+
+
+def test_rename_source_ignores_cancel(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path="a.csv", label="original", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt"])
+
+    received = []
+    panel.source_renamed.connect(received.append)
+    with patch("csv_plot_maker.ui.csv_panel.QInputDialog.getText", return_value=("something else", False)):
+        panel._rename_source("a")
+
+    assert source.label == "original"
+    assert received == []
+
+
+def test_rename_source_rejects_duplicate_label(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    panel._sources["a"] = DataSource(id="a", path="a.csv", label="alpha", color="#dbeafe")
+    panel._sources["b"] = DataSource(id="b", path="b.csv", label="beta", color="#dcfce7")
+
+    received = []
+    panel.source_renamed.connect(received.append)
+    with patch("csv_plot_maker.ui.csv_panel.QInputDialog.getText", return_value=("alpha", True)):
+        with patch("csv_plot_maker.ui.csv_panel.QMessageBox.warning") as mock_warning:
+            panel._rename_source("b")
+
+    assert panel._sources["b"].label == "beta"
+    assert mock_warning.called
+    assert received == []
+
+
+def test_close_all_files_clears_every_source_when_confirmed(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    panel._sources["a"] = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["b"] = DataSource(id="b", path="b.csv", label="b", color="#dcfce7")
+    panel.column_list.set_source_group(panel._sources["a"], ["x"])
+    panel.column_list.set_source_group(panel._sources["b"], ["y"])
+
+    received = []
+    panel.all_files_closed.connect(lambda: received.append(True))
+    with patch(
+        "csv_plot_maker.ui.csv_panel.QMessageBox.question",
+        return_value=QMessageBox.StandardButton.Yes,
+    ):
+        panel._on_close_all_clicked()
+
+    assert panel._sources == {}
+    assert panel.column_list.count() == 0
+    assert panel.path_label.text() == "No file loaded"
+    assert received == [True]
+
+
+def test_close_all_files_does_nothing_when_canceled(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    panel._sources["a"] = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+
+    received = []
+    panel.all_files_closed.connect(lambda: received.append(True))
+    with patch(
+        "csv_plot_maker.ui.csv_panel.QMessageBox.question",
+        return_value=QMessageBox.StandardButton.No,
+    ):
+        panel._on_close_all_clicked()
+
+    assert "a" in panel._sources
+    assert received == []
+
+
+def test_close_all_files_button_is_a_noop_with_nothing_open(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+
+    with patch("csv_plot_maker.ui.csv_panel.QMessageBox.question") as mock_question:
+        panel._on_close_all_clicked()
+
+    mock_question.assert_not_called()
 
 
 def test_confirm_memory_headroom_fails_open_on_missing_file(qtbot):

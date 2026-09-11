@@ -1,16 +1,13 @@
 .venv/
+.claude/
 __pycache__/
-*.pyc
 .pytest_cache/
 *.egg-info/
-build/
-dist/
 *.csv
-!tests/fixtures/*.csv
-tests/test_theme.py
-CSV Plot Maker.spec
-tests/fixtures/small.csv
-.claude/
-*.csv
+*.pyc
 *.json
 *.xlsx
+build/
+dist/
+tests/test_theme.py
+CSV Plot Maker.spec

@@ -23,6 +23,17 @@ _FLOAT32_DOWNCAST_ATOL = 1e-9
 # these columns are rejected outright regardless of the round-trip result.
 _FLOAT32_SAFE_MAGNITUDE = 2**24
 
+# polars infers a 128-bit integer type for a column holding values beyond
+# Int64's range (e.g. a raw counter that overflows into the UInt64 range,
+# which polars' schema inference represents as a *signed* Int128 rather than
+# UInt64) -- but its numpy interop has no conversion for either 128-bit type:
+# Series.to_numpy() panics natively (not a catchable Python exception) rather
+# than raising. Route these through float64 instead of calling to_numpy()
+# directly; every plotted column ends up float32/float64 anyway, so this is
+# the same precision trade-off _downcast_to_float32_if_safe already makes for
+# ordinary large numbers, just applied one step earlier.
+_NUMPY_UNSUPPORTED_INT_DTYPES = (pl.Int128, pl.UInt128)
+
 
 def _downcast_to_float32_if_safe(arr: np.ndarray) -> np.ndarray:
     """Return `arr` as float32 if that's safe (bounded magnitude + round-trips within tolerance), else float64 unchanged."""
@@ -185,6 +196,8 @@ def load_csv(path: str, header_trim_keywords: list[str] | None = None) -> Column
         # numpy dict are both fully resident in memory at the same time).
         column = df.drop_in_place(name)
         if is_numeric:
+            if dtype in _NUMPY_UNSUPPORTED_INT_DTYPES:
+                column = column.cast(pl.Float64)
             arr = column.to_numpy()
             # Branch on the array's actual resulting dtype rather than the
             # source polars dtype: a nullable Int64 column comes back from
