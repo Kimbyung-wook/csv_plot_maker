@@ -18,6 +18,13 @@ _LEGEND_SAMPLE_MIN_PX = 8
 # recalibrating the formula itself and nudging Small's icon size too.
 _LEGEND_SAMPLE_SIZE_OVERRIDES: dict[int, int] = {5: 9}
 
+# Fallback for _current_grid_alpha() if pyqtgraph's own internal
+# PlotItem.ctrl.gridAlphaSlider (undocumented, not part of its public API)
+# is ever missing/renamed by a future pyqtgraph version -- matches this
+# app's own showGrid(alpha=0.25) call in SubplotView.__init__, so the
+# fallback still looks the same as what every plot is actually set up with.
+_DEFAULT_GRID_ALPHA = 0.25
+
 
 def _legend_sample_size(size_pt: int) -> int:
     if size_pt in _LEGEND_SAMPLE_SIZE_OVERRIDES:
@@ -117,6 +124,7 @@ class SubplotView:
         self._curve_axis: dict[str, str] = {}
         self._curve_legend_names: dict[str, str] = {}
         self._foreground = pg.mkColor("k")
+        self._torn_down = False
         # Grid lines are painted by the axis items (top/bottom/left/right),
         # which are siblings of the ViewBox in the scene tree, not children
         # of it -- and pyqtgraph adds the ViewBox to that shared parent
@@ -430,7 +438,15 @@ class SubplotView:
         control, and a paint/layout event already queued for right_vb that
         arrives after Python has dropped it raises "libshiboken: Internal
         C++ object (ViewBox) already deleted" instead of a clean teardown.
+
+        Idempotent: a second call (or a call after the view was already
+        partially torn down) is a no-op instead of raising, since
+        setXLink(None)/disconnect() both fail with RuntimeError against an
+        already-unlinked/-disconnected or already-deleted C++ side.
         """
+        if self._torn_down:
+            return
+        self._torn_down = True
         self.clear()
         self.right_vb.setXLink(None)
         self.plot_item.vb.sigResized.disconnect(self._sync_right_view_geometry)
@@ -440,6 +456,21 @@ class SubplotView:
 
     def has_secondary_series(self) -> bool:
         return any(axis == "secondary" for axis in self._curve_axis.values())
+
+    def _current_grid_alpha(self) -> float:
+        """The grid transparency the user last set via the plot's own
+        right-click context menu (pyqtgraph's own UI, not this app's) --
+        read from its internal gridAlphaSlider widget so the right axis'
+        grid (see _update_right_axis_visibility) matches the left/bottom
+        axes' grid exactly. `ctrl.gridAlphaSlider` is an undocumented
+        internal of pyqtgraph's PlotItem, not its public API, so this falls
+        back to this app's own default instead of raising if a future
+        pyqtgraph version renames or removes it.
+        """
+        try:
+            return self.plot_item.ctrl.gridAlphaSlider.value()
+        except AttributeError:
+            return _DEFAULT_GRID_ALPHA
 
     def _update_right_axis_visibility(self) -> None:
         has_secondary = self.has_secondary_series()
@@ -458,7 +489,7 @@ class SubplotView:
             axis_item.setStyle(showValues=True)
             axis_item.setPen(self._foreground)
             axis_item.setTextPen(self._foreground)
-            axis_item.setGrid(self.plot_item.ctrl.gridAlphaSlider.value())
+            axis_item.setGrid(self._current_grid_alpha())
         else:
             transparent = pg.mkColor(0, 0, 0, 0)
             axis_item.setStyle(showValues=False)

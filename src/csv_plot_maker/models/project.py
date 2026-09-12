@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from csv_plot_maker.models.data_source import DataSource, SourceRef
+from csv_plot_maker.models.data_source import UNASSIGNED_SOURCE_ID, DataSource, SourceRef
 from csv_plot_maker.models.subplot import SubplotConfig
 
 
@@ -132,7 +132,7 @@ class ProjectState:
             # references to whichever source is currently open, matching
             # old single-CSV semantics exactly.
             fallback = next(iter(open_sources.values()))
-            id_remap[""] = fallback.id
+            id_remap[UNASSIGNED_SOURCE_ID] = fallback.id
 
         if id_remap:
             for subplot in self.subplots:

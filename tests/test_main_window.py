@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 from PySide6.QtCore import Qt
 
@@ -6,6 +8,8 @@ from csv_plot_maker.models.data_source import DataSource, SourceRef
 from csv_plot_maker.models.serialization import save_project
 from csv_plot_maker.models.series import Series
 from csv_plot_maker.ui.main_window import MainWindow
+
+FIXTURE = Path(__file__).parent / "fixtures" / "small.csv"
 
 
 def _store_with(sparse_col: np.ndarray, dense_col: np.ndarray) -> ColumnStore:
@@ -608,6 +612,36 @@ def test_only_linked_subplots_share_x_range_the_rest_stay_independent(qtbot):
     assert list(view_c.plot_item.vb.viewRange()[0]) == original_c_range
 
 
+def test_grid_dims_changed_preserves_x_range_of_populated_subplots(qtbot):
+    """_on_grid_dims_changed's rebuild discards and recreates every
+    SubplotView, wiping the user's pan/zoom back to pyqtgraph's default
+    (0, 1) range -- it must snapshot each populated subplot's X range by
+    (row, col) position first and reapply it once the new views exist.
+    """
+    win = MainWindow()
+    qtbot.addWidget(win)
+    source = _install_store(
+        win,
+        _store_with(
+            sparse_col=np.array([1.0, 2.0, 3.0]),
+            dense_col=np.array([1.0, 2.0, 3.0]),
+        ),
+    )
+    win.project.resize_grid(1, 2)
+    win.plot_grid.rebuild(1, 2)
+    populated, empty = win.project.subplots
+    populated.add_series(Series(y_column="sparse", source_id=source.id, x_column="dense"))
+    win._replot_all_subplots()
+
+    view = win.plot_grid.get_view(populated.row, populated.col)
+    view.set_x_range(10.0, 20.0, padding=0)
+
+    win._on_grid_dims_changed(1, 3)
+
+    restored_view = win.plot_grid.get_view(populated.row, populated.col)
+    assert list(restored_view.get_x_range()) == [10.0, 20.0]
+
+
 def test_loading_a_second_csv_does_not_reset_existing_subplots(qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
@@ -728,3 +762,26 @@ def test_old_style_global_link_x_axes_migrates_to_every_subplot_linked(qtbot, tm
     win._load_layout_from_path(str(path))
 
     assert all(sp.link_x_axis for sp in win.project.subplots)
+
+
+def test_data_source_registries_stay_in_sync_across_load_and_close(qtbot):
+    """CsvPanel._sources and MainWindow.data_sources are two independently
+    updated registries of the same open files (populated on different
+    triggers -- load-start vs. load-finish success), kept consistent only
+    by convention rather than a single owner. This is a characterization
+    test for that convention rather than of one specific code path: it
+    should keep failing loudly if a future change ever lets the two drift
+    apart, since nothing else in the test suite would catch that.
+    """
+    win = MainWindow()
+    qtbot.addWidget(win)
+
+    with qtbot.waitSignal(win.csv_panel.csv_loaded, timeout=5000):
+        win.csv_panel.load_path(str(FIXTURE))
+
+    assert set(win.data_sources.keys()) == set(win.csv_panel._sources.keys())
+    (source_id,) = win.data_sources.keys()
+
+    win.csv_panel.close_source(source_id)
+
+    assert set(win.data_sources.keys()) == set(win.csv_panel._sources.keys()) == set()

@@ -175,9 +175,6 @@ class MainWindow(QMainWindow):
             return None
         return self._active_subplot().get_series(self._selected_series_id)
 
-    def _column(self, source_id: str, name: str) -> np.ndarray:
-        return self.data_sources[source_id].store.get(name)
-
     def _source_label(self, source_id: str) -> str:
         source = self.data_sources.get(source_id)
         return source.label if source is not None else "?"
@@ -238,6 +235,10 @@ class MainWindow(QMainWindow):
         linked = {(sp.row, sp.col) for sp in self.project.subplots if sp.link_x_axis}
         self.plot_grid.set_linked_views(linked)
 
+    def _refresh_selector_and_controls(self) -> None:
+        self._refresh_subplot_selector()
+        self._refresh_active_subplot_controls()
+
     def _refresh_series_list(self) -> None:
         subplot = self._active_subplot()
         # With only one CSV open there's nothing to tell apart, so the color
@@ -268,6 +269,16 @@ class MainWindow(QMainWindow):
     def _series_y_data(self, series: Series) -> np.ndarray:
         return series.y_data(self.data_sources[series.source_id])
 
+    def _push_series_data(self, view, subplot: SubplotConfig, series: Series) -> None:
+        """Recompute `series`' plotted data from its source and resend it to
+        `view`. Assumes `series` is already ready (see _series_ready) --
+        callers that iterate all series in a subplot (like _replot_subplot)
+        still need to check that themselves first.
+        """
+        x_data = self._series_x_data(series)
+        y_data = self._series_y_data(series)
+        view.set_series_data(series, x_data, y_data, self._legend_prefix_for(subplot, series))
+
     def _sync_x_axis_titles(self) -> None:
         for subplot in self.project.subplots:
             view = self.plot_grid.get_view(subplot.row, subplot.col)
@@ -283,9 +294,7 @@ class MainWindow(QMainWindow):
                 # again (see _on_csv_loaded).
                 view.remove_series(series.id)
                 continue
-            x_data = self._series_x_data(series)
-            y_data = self._series_y_data(series)
-            view.set_series_data(series, x_data, y_data, self._legend_prefix_for(subplot, series))
+            self._push_series_data(view, subplot, series)
         view.set_labels(
             self.project.effective_x_label(subplot),
             subplot.y_label_left,
@@ -406,7 +415,7 @@ class MainWindow(QMainWindow):
         rebuilt: refresh every side-panel control, replot every subplot,
         then auto-range and (optionally) restore any saved Y ranges.
 
-        If the project has a linked subplot group, _refresh_subplot_selector()
+        If the project has a linked subplot group, _refresh_selector_and_controls()
         below applies that membership and broadcasts the reference subplot's
         still-empty default (0, 1) X range to the rest of the group -- which
         disables their autoRange before _replot_all_subplots() has added any
@@ -414,8 +423,7 @@ class MainWindow(QMainWindow):
         (same as clicking each subplot's "A" button) re-syncs the link using
         the now-correctly-fitted reference range.
         """
-        self._refresh_subplot_selector()
-        self._refresh_active_subplot_controls()
+        self._refresh_selector_and_controls()
         self._replot_all_subplots()
         self._autorange_all_views()
         if restore_saved_ranges:
@@ -440,8 +448,7 @@ class MainWindow(QMainWindow):
         self.project = ProjectState(grid_rows=1, grid_cols=1)
         self.project.build_default_grid()
         self.plot_grid.rebuild(self.project.grid_rows, self.project.grid_cols)
-        self._refresh_subplot_selector()
-        self._refresh_active_subplot_controls()
+        self._refresh_selector_and_controls()
         self.statusBar().showMessage("Closed all files")
 
     def _on_source_renamed(self, source_id: str) -> None:
@@ -492,6 +499,29 @@ class MainWindow(QMainWindow):
                 view.set_y_range(y_min, y_max, padding=0.02)
         self._sync_linked_views()
 
+    def _snapshot_by_position(self, getter, predicate=lambda sp: True) -> dict[tuple[int, int], object]:
+        """Capture getter(view) for every subplot satisfying predicate, keyed
+        by grid (row, col) position rather than subplot id/object -- a grid
+        rebuild discards and recreates every SubplotView, but each surviving
+        subplot keeps its own (row, col), so position is what a later
+        _apply_by_position() call can still look values back up by. Subplots
+        failing predicate simply get no entry (not a None entry).
+        """
+        return {
+            (sp.row, sp.col): getter(self.plot_grid.get_view(sp.row, sp.col))
+            for sp in self.project.subplots
+            if predicate(sp)
+        }
+
+    def _apply_by_position(self, snapshot: dict[tuple[int, int], object], setter) -> None:
+        """Apply setter(view, value) for every subplot whose (row, col) has a
+        non-None entry in `snapshot` -- see _snapshot_by_position.
+        """
+        for sp in self.project.subplots:
+            value = snapshot.get((sp.row, sp.col))
+            if value is not None:
+                setter(self.plot_grid.get_view(sp.row, sp.col), value)
+
     def _capture_current_y_ranges(self) -> None:
         """Snapshot each subplot's on-screen Y range (primary + secondary,
         whatever the user last zoomed/panned to, or whatever autorange last
@@ -499,19 +529,18 @@ class MainWindow(QMainWindow):
         subplot has no meaningful view to capture, so it's reset to None
         rather than saving pyqtgraph's meaningless default (0, 1) range.
         """
+        has_series = lambda sp: sp.series
+        left = self._snapshot_by_position(lambda v: list(v.get_y_range()), has_series)
+        right = self._snapshot_by_position(
+            lambda v: list(v.get_y_range(secondary=True)) if v.has_secondary_series() else None, has_series
+        )
         for subplot in self.project.subplots:
-            if not subplot.series:
-                subplot.y_range_left = None
-                subplot.y_range_right = None
-                continue
-            view = self.plot_grid.get_view(subplot.row, subplot.col)
-            subplot.y_range_left = list(view.get_y_range())
-            subplot.y_range_right = list(view.get_y_range(secondary=True)) if view.has_secondary_series() else None
+            key = (subplot.row, subplot.col)
+            subplot.y_range_left = left.get(key)
+            subplot.y_range_right = right.get(key)
 
     def _capture_data_source_refs(self) -> None:
-        self.project.data_sources = [
-            SourceRef(id=s.id, path=s.path, label=s.label, color=s.color) for s in self.data_sources.values()
-        ]
+        self.project.data_sources = [SourceRef.from_source(s) for s in self.data_sources.values()]
 
     def _restore_saved_y_ranges(self) -> None:
         """Apply each subplot's saved Y range (see _capture_current_y_ranges)
@@ -519,14 +548,15 @@ class MainWindow(QMainWindow):
         subplot with no saved range (never saved before, or had none to
         capture) is left at that fresh autorange fit instead.
         """
-        for subplot in self.project.subplots:
-            if not subplot.series:
-                continue
-            view = self.plot_grid.get_view(subplot.row, subplot.col)
-            if subplot.y_range_left is not None:
-                view.set_y_range(*subplot.y_range_left, padding=0)
-            if subplot.y_range_right is not None and view.has_secondary_series():
-                view.set_y_range(*subplot.y_range_right, secondary=True, padding=0)
+        populated = [sp for sp in self.project.subplots if sp.series]
+        left = {(sp.row, sp.col): sp.y_range_left for sp in populated}
+        self._apply_by_position(left, lambda v, r: v.set_y_range(*r, padding=0))
+        right = {
+            (sp.row, sp.col): sp.y_range_right
+            for sp in populated
+            if self.plot_grid.get_view(sp.row, sp.col).has_secondary_series()
+        }
+        self._apply_by_position(right, lambda v, r: v.set_y_range(*r, secondary=True, padding=0))
 
     def _on_grid_dims_changed(self, rows: int, cols: int) -> None:
         # rebuild() below throws away every subplot's PlotItem/ViewBox --
@@ -542,24 +572,15 @@ class MainWindow(QMainWindow):
         # data dropped onto them afterward would stay stuck at (0, 1)
         # instead of fitting. Only preserve subplots that actually had
         # something plotted.
-        populated_positions = {(sp.row, sp.col) for sp in self.project.subplots if sp.series}
-        previous_x_ranges = {
-            (row, col): view.get_x_range()
-            for (row, col), view in self.plot_grid.views().items()
-            if (row, col) in populated_positions
-        }
+        previous_x_ranges = self._snapshot_by_position(lambda v: v.get_x_range(), predicate=lambda sp: sp.series)
 
         self.project.resize_grid(rows, cols)
         self.plot_grid.rebuild(rows, cols)
 
-        self._refresh_subplot_selector()
-        self._refresh_active_subplot_controls()
+        self._refresh_selector_and_controls()
         self._replot_all_subplots()
 
-        for subplot in self.project.subplots:
-            prev_range = previous_x_ranges.get((subplot.row, subplot.col))
-            if prev_range is not None:
-                self.plot_grid.get_view(subplot.row, subplot.col).set_x_range(*prev_range, padding=0)
+        self._apply_by_position(previous_x_ranges, lambda v, r: v.set_x_range(*r, padding=0))
 
     def _on_active_subplot_changed(self, subplot_id: str) -> None:
         self.project.active_subplot_id = subplot_id
@@ -643,6 +664,46 @@ class MainWindow(QMainWindow):
             f"Applied to {count} other series from {self._source_label(series.source_id)}"
         )
 
+    def _find_series_to_move(self, subplot: SubplotConfig, source_id: str, column_name: str) -> tuple[SubplotConfig, Series] | None:
+        """A column already plotted in a *different* subplot gets moved to the
+        drop target instead of duplicated there -- dragging it onto another
+        subplot reads as "move this series here", not "add a second copy".
+        Dropping it back onto the subplot it's already in is unaffected
+        (duplicate series within one subplot are allowed by design, see
+        DraggableColumnList's docstring); a column already plotted in more
+        than one subplot is left alone too, since which copy to move would
+        be ambiguous. Matched by (source, column) together, so the same
+        column name in a *different* file is never mistaken for this one.
+        """
+        matches = [
+            (sp, s)
+            for sp in self.project.subplots
+            if sp.id != subplot.id
+            for s in sp.series
+            if s.y_column == column_name and s.source_id == source_id
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _build_dropped_series(self, subplot: SubplotConfig, source: DataSource, source_id: str, column_name: str) -> Series:
+        """A mostly-empty column (e.g. a rarely-updated periodic "echo"
+        field) has its few real samples too far apart for a plain
+        connecting line to ever draw between two of them -- default it to
+        marker-only so it's visible immediately instead of looking like
+        nothing was added. A connecting line would also be misleading here
+        even on the rare occasion two real samples do land on adjacent
+        rows: it implies a smooth transition between two far-apart
+        timestamps that isn't actually in the data.
+        """
+        sparse = source.store.is_sparse(column_name)
+        return Series(
+            y_column=column_name,
+            source_id=source_id,
+            x_column=self._default_x_column_for_source(source) or "",
+            color=next_default_color(len(subplot.series)),
+            marker="dot" if sparse else None,
+            line_style="none" if sparse else "solid",
+        )
+
     def _on_column_dropped(self, row: int, col: int, source_id: str, column_name: str) -> None:
         source = self.data_sources.get(source_id)
         if source is None or source.store is None:
@@ -654,51 +715,19 @@ class MainWindow(QMainWindow):
         if subplot is None:
             return
 
-        # A column already plotted in a *different* subplot gets moved to the
-        # drop target instead of duplicated there -- dragging it onto another
-        # subplot reads as "move this series here", not "add a second copy".
-        # Dropping it back onto the subplot it's already in is unaffected
-        # (duplicate series within one subplot are allowed by design, see
-        # DraggableColumnList's docstring); a column already plotted in more
-        # than one subplot is left alone too, since which copy to move would
-        # be ambiguous. Matched by (source, column) together, so the same
-        # column name in a *different* file is never mistaken for this one.
-        matches = [
-            (sp, s)
-            for sp in self.project.subplots
-            if sp.id != subplot.id
-            for s in sp.series
-            if s.y_column == column_name and s.source_id == source_id
-        ]
+        match = self._find_series_to_move(subplot, source_id, column_name)
         moved_from: tuple[int, int] | None = None
-        if len(matches) == 1:
+        if match is not None:
             # Move the existing Series object itself rather than deleting it
             # and adding a fresh default-styled one -- a move should carry
             # over whatever color/marker/axis the user already set on it,
             # not reset to defaults just because it changed subplots.
-            source_subplot, series = matches[0]
+            source_subplot, series = match
             self._remove_series_from(source_subplot, series.id)
             moved_from = (source_subplot.row, source_subplot.col)
             subplot.add_series(series)
         else:
-            color = next_default_color(len(subplot.series))
-            # A mostly-empty column (e.g. a rarely-updated periodic "echo"
-            # field) has its few real samples too far apart for a plain
-            # connecting line to ever draw between two of them -- default it
-            # to marker-only so it's visible immediately instead of looking
-            # like nothing was added. A connecting line would also be
-            # misleading here even on the rare occasion two real samples do
-            # land on adjacent rows: it implies a smooth transition between
-            # two far-apart timestamps that isn't actually in the data.
-            sparse = source.store.is_sparse(column_name)
-            series = Series(
-                y_column=column_name,
-                source_id=source_id,
-                x_column=self._default_x_column_for_source(source) or "",
-                color=color,
-                marker="dot" if sparse else None,
-                line_style="none" if sparse else "solid",
-            )
+            series = self._build_dropped_series(subplot, source, source_id, column_name)
             subplot.add_series(series)
 
         self._set_active_subplot(subplot.id)
@@ -740,9 +769,7 @@ class MainWindow(QMainWindow):
             return
         subplot = self._active_subplot()
         series.axis = axis
-        x_data = self._series_x_data(series)
-        y_data = self._series_y_data(series)
-        self._active_view().set_series_data(series, x_data, y_data, self._legend_prefix_for(subplot, series))
+        self._push_series_data(self._active_view(), subplot, series)
         # Reassigning a series to/from the secondary axis changes whether this
         # subplot's right axis needs its shared reserved width (see
         # PlotGridWidget._sync_right_axis_widths) -- without this, the other
@@ -769,9 +796,7 @@ class MainWindow(QMainWindow):
         subplot = self._active_subplot()
         series.scale = self.style_panel.current_scale()
         series.offset = self.style_panel.current_offset()
-        x_data = self._series_x_data(series)
-        y_data = self._series_y_data(series)
-        self._active_view().set_series_data(series, x_data, y_data, self._legend_prefix_for(subplot, series))
+        self._push_series_data(self._active_view(), subplot, series)
 
     def _on_style_remove_requested(self) -> None:
         if self._selected_series_id:

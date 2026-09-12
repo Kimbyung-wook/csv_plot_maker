@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
+from csv_plot_maker.models.data_source import UNASSIGNED_SOURCE_ID
+
 if TYPE_CHECKING:
     from csv_plot_maker.models.data_source import DataSource
 
@@ -22,7 +24,7 @@ class Series:
     """
 
     y_column: str
-    source_id: str = ""
+    source_id: str = UNASSIGNED_SOURCE_ID
     # This series' own X data -- always a column from `source_id` (the same
     # file its Y data comes from), never a different one: pairing X/Y from
     # two different files almost never has matching row counts, so a subplot

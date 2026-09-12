@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, Qt, Signal
-from PySide6.QtGui import QColor, QDrag, QKeySequence
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from csv_plot_maker.ui.column_drag import start_column_drag
 
 _Y_COLUMN_ROLE = Qt.ItemDataRole.UserRole + 1
 _SOURCE_ID_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -51,15 +53,7 @@ class SeriesListWidget(QListWidget):
 
     def startDrag(self, supportedActions) -> None:
         items = self.selectedItems()
-        if not items:
-            return
-        mime = QMimeData()
-        mime.setText(
-            "\n".join(f"{item.data(_SOURCE_ID_ROLE)}\t{item.data(_Y_COLUMN_ROLE)}" for item in items)
-        )
-        drag = QDrag(self)
-        drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.CopyAction)
+        start_column_drag(self, [(item.data(_SOURCE_ID_ROLE), item.data(_Y_COLUMN_ROLE)) for item in items])
 
 
 class SeriesPanel(QWidget):

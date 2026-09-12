@@ -64,7 +64,7 @@ def test_drag_exports_the_y_column_of_every_selected_series(qtbot):
     panel.series_list.item(1).setSelected(True)
 
     captured = {}
-    with patch("csv_plot_maker.ui.series_panel.QDrag") as mock_drag_cls:
+    with patch("csv_plot_maker.ui.column_drag.QDrag") as mock_drag_cls:
         mock_drag_cls.return_value.setMimeData.side_effect = lambda mime: captured.update(text=mime.text())
         panel.series_list.startDrag(Qt.DropAction.CopyAction)
 
@@ -86,7 +86,7 @@ def test_click_drag_does_not_extend_the_selection(qtbot):
     rect_first = list_widget.visualItemRect(list_widget.item(0))
     rect_last = list_widget.visualItemRect(list_widget.item(2))
 
-    with patch("csv_plot_maker.ui.series_panel.QDrag"):
+    with patch("csv_plot_maker.ui.column_drag.QDrag"):
         QTest.mousePress(list_widget.viewport(), Qt.MouseButton.LeftButton, pos=rect_first.center())
         QTest.mouseMove(list_widget.viewport(), rect_last.center())
         selected_mid_drag = [item.text() for item in list_widget.selectedItems()]

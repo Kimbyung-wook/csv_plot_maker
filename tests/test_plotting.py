@@ -161,20 +161,6 @@ def test_plot_grid_widget_rebuild_changes_dimensions(qtbot):
             assert widget.get_view(r, c) is not None
 
 
-def test_subplot_view_teardown_removes_right_vb_from_scene(qtbot):
-    widget = PlotGridWidget()
-    qtbot.addWidget(widget)
-    view = widget.get_view(0, 0)
-
-    series = Series(y_column="a", color="#1f77b4", line_style="solid", width=1.5, axis="secondary")
-    view.set_series_data(series, np.array([0.0, 1.0]), np.array([1.0, 2.0]))
-    assert view.right_vb.scene() is not None
-
-    view.teardown()
-
-    assert view.right_vb.scene() is None
-
-
 def test_plot_grid_widget_rebuild_clears_previous_secondary_viewboxes(qtbot):
     """Regression test for the "잔상"/ghost-trace bug: a secondary-axis
     ViewBox is added directly to the scene (see SubplotView.__init__) rather
@@ -192,3 +178,29 @@ def test_plot_grid_widget_rebuild_clears_previous_secondary_viewboxes(qtbot):
     widget.rebuild(2, 2)
 
     assert stale_right_vb.scene() is None
+
+
+def test_repeated_rebuild_does_not_accumulate_x_range_broadcast_connections(qtbot):
+    """Each rebuild() connects a fresh sigXRangeChanged lambda per view (see
+    rebuild()'s loop) with no matching disconnect -- relying on implicit C++
+    cleanup when self.clear() destroys the old PlotItems/ViewBoxes instead.
+    If that cleanup were ever incomplete, a stale connection from an earlier
+    rebuild could still fire and double up (or misdirect) an X-range
+    broadcast. Rebuilding several times before linking/triggering a range
+    change is a regression guard against exactly that.
+    """
+    widget = PlotGridWidget()
+    qtbot.addWidget(widget)
+
+    for _ in range(3):
+        widget.rebuild(2, 2)
+
+    widget.set_linked_views({(0, 0), (0, 1)})
+    target = widget.get_view(0, 1)
+    calls = []
+    original_set_x_range = target.plot_item.setXRange
+    target.plot_item.setXRange = lambda *a, **k: (calls.append((a, k)), original_set_x_range(*a, **k))[-1]
+
+    widget.get_view(0, 0).plot_item.setXRange(5.0, 10.0, padding=0)
+
+    assert len(calls) == 1

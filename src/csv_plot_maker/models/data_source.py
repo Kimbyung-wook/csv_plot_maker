@@ -25,6 +25,15 @@ def color_for_index(index: int) -> str:
     return SOURCE_COLOR_PALETTE[index % len(SOURCE_COLOR_PALETTE)]
 
 
+# Series.source_id's default -- also what a pre-multi-CSV-era saved layout's
+# series always have, since source_id didn't exist yet when they were
+# written (see ProjectState.reconcile_data_sources, which remaps this
+# sentinel to whichever file is open in that fallback case). Named here
+# instead of comparing to a bare "" at each call site, since both files rely
+# on the same convention with no other structural link between them.
+UNASSIGNED_SOURCE_ID = ""
+
+
 @dataclass
 class DataSource:
     """One loaded CSV file: its columns plus the identity needed to tell it
@@ -38,7 +47,7 @@ class DataSource:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     path: str = ""
     label: str = ""
-    color: str = "#dbeafe"
+    color: str = field(default_factory=lambda: color_for_index(0))
     store: ColumnStore | None = None
 
 
@@ -54,3 +63,7 @@ class SourceRef:
     path: str
     label: str
     color: str
+
+    @classmethod
+    def from_source(cls, source: DataSource) -> SourceRef:
+        return cls(id=source.id, path=source.path, label=source.label, color=source.color)

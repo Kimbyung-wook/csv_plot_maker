@@ -129,15 +129,12 @@ def load_csv(path: str, header_trim_keywords: list[str] | None = None) -> Column
         df.columns = trim_headers(df.columns, header_trim_keywords)
     store = ColumnStore(source_path=path, row_count=df.height)
 
-    store.columns["Sequential"] = np.arange(1, df.height + 1, dtype=np.float64)
-    store.dtypes["Sequential"] = "Int64"
-    store.numeric["Sequential"] = True
+    store.set_column("Sequential", np.arange(1, df.height + 1, dtype=np.float64), dtype="Int64", is_numeric=True)
 
     for name, dtype in zip(df.columns, df.dtypes):
         is_numeric = dtype.is_numeric()
         is_temporal = dtype in (pl.Date, pl.Datetime, pl.Time)
-        store.dtypes[name] = str(dtype)
-        store.numeric[name] = is_numeric or is_temporal
+        store.set_metadata(name, str(dtype), is_numeric or is_temporal)
 
         if not (is_numeric or is_temporal):
             column = df.drop_in_place(name)
@@ -151,8 +148,7 @@ def load_csv(path: str, header_trim_keywords: list[str] | None = None) -> Column
                     # entirely empty in this file, so keep it plottable
                     # (all-NaN) instead of dropping it like a genuine
                     # non-numeric column (e.g. a text "label" column).
-                    store.numeric[name] = True
-                    store.columns[name] = np.full(df.height, np.nan, dtype=np.float64)
+                    store.set_column(name, np.full(df.height, np.nan, dtype=np.float64), is_numeric=True)
                     continue
                 # A column can also land on String while genuinely holding
                 # numeric text: if this column is null across almost the
@@ -172,13 +168,12 @@ def load_csv(path: str, header_trim_keywords: list[str] | None = None) -> Column
                         numeric_column = column.cast(numeric_dtype, strict=True)
                     except pl.exceptions.PolarsError:
                         continue
-                    store.numeric[name] = True
                     arr = numeric_column.to_numpy()
                     if arr.dtype == np.float64:
                         arr = _downcast_to_float32_if_safe(arr)
                     elif np.issubdtype(arr.dtype, np.integer):
                         arr = _narrow_integer_width(arr)
-                    store.columns[name] = arr
+                    store.set_column(name, arr, is_numeric=True)
                     break
             # Non-numeric columns can never be plotted -- every column-
             # selection path in the UI gates on ColumnStore.numeric_column_
@@ -207,7 +202,7 @@ def load_csv(path: str, header_trim_keywords: list[str] | None = None) -> Column
                 arr = _downcast_to_float32_if_safe(arr)
             elif np.issubdtype(arr.dtype, np.integer):
                 arr = _narrow_integer_width(arr)
-            store.columns[name] = arr
+            store.set_column(name, arr)
         else:
             # Physical representation converts cleanly to a plottable numeric
             # axis. pl.Time's physical value is nanoseconds since midnight --
@@ -216,7 +211,7 @@ def load_csv(path: str, header_trim_keywords: list[str] | None = None) -> Column
             # microseconds since epoch) since nothing has asked for those in
             # a different unit yet.
             physical = column.to_physical().to_numpy().astype(np.float64)
-            store.columns[name] = physical / 1e9 if dtype == pl.Time else physical
+            store.set_column(name, physical / 1e9 if dtype == pl.Time else physical)
 
     del df
     store.load_time_ms = (time.perf_counter() - start) * 1000

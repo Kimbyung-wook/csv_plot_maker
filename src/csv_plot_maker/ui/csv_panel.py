@@ -5,8 +5,8 @@ import uuid
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QMimeData, QThreadPool, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QDrag, QKeySequence, QShortcut
+from PySide6.QtCore import QThreadPool, Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from csv_plot_maker.data.column_store import ColumnStore
 from csv_plot_maker.data.loader import load_csv, peek_schema
 from csv_plot_maker.models.data_source import DataSource, color_for_index
+from csv_plot_maker.ui.column_drag import start_column_drag
 from csv_plot_maker.ui.header_trim_dialog import HeaderTrimDialog
 from csv_plot_maker.ui.header_trim_settings import load_default_keywords
 from csv_plot_maker.utils.workers import CallableWorker
@@ -49,6 +50,15 @@ _SOURCE_ID_ROLE = Qt.ItemDataRole.UserRole
 # a column row (whose _SOURCE_ID_ROLE is the same value, but on a selectable,
 # draggable item).
 _HEADER_SOURCE_ID_ROLE = Qt.ItemDataRole.UserRole + 1
+# Whether a header row's group is currently collapsed (its column rows
+# hidden) -- set only on header rows, alongside _HEADER_SOURCE_ID_ROLE. Kept
+# on the header item itself rather than a separate dict so it disappears for
+# free when remove_source_group() takes the header out of the list: closing
+# a file (or fully replacing its group) forgets whatever collapse state it
+# had, by construction rather than by extra cleanup code.
+_COLLAPSED_ROLE = Qt.ItemDataRole.UserRole + 2
+_EXPANDED_GLYPH = "▾"  # ▾
+_COLLAPSED_GLYPH = "▸"  # ▸
 
 
 class DraggableColumnList(QListWidget):
@@ -67,6 +77,7 @@ class DraggableColumnList(QListWidget):
         super().__init__(parent)
         self.setDragEnabled(True)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.itemClicked.connect(self._on_item_clicked)
 
     def keyPressEvent(self, event) -> None:
         if event.matches(QKeySequence.StandardKey.SelectAll):
@@ -79,16 +90,50 @@ class DraggableColumnList(QListWidget):
 
     def startDrag(self, supportedActions) -> None:
         items = self.selectedItems()
-        if not items:
+        start_column_drag(self, [(item.data(_SOURCE_ID_ROLE), item.text()) for item in items])
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        source_id = item.data(_HEADER_SOURCE_ID_ROLE)
+        if source_id is not None:
+            self.toggle_group_collapsed(source_id)
+
+    def is_group_collapsed(self, source_id: str) -> bool:
+        for row in range(self.count()):
+            item = self.item(row)
+            if item.data(_HEADER_SOURCE_ID_ROLE) == source_id:
+                return bool(item.data(_COLLAPSED_ROLE))
+        return False
+
+    def toggle_group_collapsed(self, source_id: str) -> None:
+        """Hide/show one source's column rows -- clicking its header row.
+
+        Collapsing also clears selection on the rows being hidden: Qt does
+        not auto-deselect a hidden item, so leaving a hidden row selected
+        would let it still be dragged out via startDrag()'s selectedItems().
+        """
+        header = None
+        for row in range(self.count()):
+            item = self.item(row)
+            if item.data(_HEADER_SOURCE_ID_ROLE) == source_id:
+                header = item
+                break
+        if header is None:
             return
-        mime = QMimeData()
-        # One "source_id\tcolumn_name" pair per line -- the drop target
-        # (PlotGridWidget) needs to know which file each column came from,
-        # since the same column name can exist in more than one open file.
-        mime.setText("\n".join(f"{item.data(_SOURCE_ID_ROLE)}\t{item.text()}" for item in items))
-        drag = QDrag(self)
-        drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.CopyAction)
+        collapsed = not bool(header.data(_COLLAPSED_ROLE))
+        header.setData(_COLLAPSED_ROLE, collapsed)
+        header.setText(self._retitled(header.text(), collapsed))
+        for row in range(self.count()):
+            item = self.item(row)
+            if item.data(_SOURCE_ID_ROLE) == source_id:
+                item.setHidden(collapsed)
+                if collapsed:
+                    item.setSelected(False)
+
+    @staticmethod
+    def _retitled(text: str, collapsed: bool) -> str:
+        """`text` with its leading glyph swapped for the one matching `collapsed`, label untouched."""
+        glyph = _COLLAPSED_GLYPH if collapsed else _EXPANDED_GLYPH
+        return glyph + text[1:]
 
     def set_source_group(self, source: DataSource, column_names: list[str]) -> None:
         """(Re)place one source's header + column rows in place, leaving
@@ -96,21 +141,33 @@ class DraggableColumnList(QListWidget):
         file and for reloading an already-open one (e.g. Header Trimming
         keywords changed) since both cases are "this source's rows are now
         exactly these names".
+
+        Reloading an already-open source preserves whatever collapsed state
+        its group had -- a keyword-list edit shouldn't silently re-expand a
+        group the user deliberately collapsed. A brand-new source (or one
+        reopened after being fully closed, which forgets collapse state by
+        construction -- see remove_source_group) always starts expanded.
         """
+        collapsed = self.is_group_collapsed(source.id)
         self.remove_source_group(source.id)
-        header = QListWidgetItem(f"▾ {source.label}")
+        header = QListWidgetItem(self._retitled(f"{_EXPANDED_GLYPH} {source.label}", collapsed))
         header.setFlags(header.flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsDragEnabled)
         font = header.font()
         font.setBold(True)
         header.setFont(font)
         header.setBackground(QColor(source.color))
         header.setData(_HEADER_SOURCE_ID_ROLE, source.id)
+        header.setData(_COLLAPSED_ROLE, collapsed)
         self.addItem(header)
         for name in column_names:
             item = QListWidgetItem(name)
             item.setData(_SOURCE_ID_ROLE, source.id)
             item.setBackground(QColor(source.color))
             self.addItem(item)
+            # setHidden() needs the item to already belong to this list (it
+            # delegates to QListWidget::setRowHidden internally) -- calling
+            # it before addItem() above is silently a no-op.
+            item.setHidden(collapsed)
 
     def remove_source_group(self, source_id: str) -> None:
         """Remove a source's header row and every column row under it."""
@@ -131,7 +188,8 @@ class DraggableColumnList(QListWidget):
         for row in range(self.count()):
             item = self.item(row)
             if item.data(_HEADER_SOURCE_ID_ROLE) == source_id:
-                item.setText(f"▾ {new_label}")
+                collapsed = bool(item.data(_COLLAPSED_ROLE))
+                item.setText(self._retitled(f"{_EXPANDED_GLYPH} {new_label}", collapsed))
                 return
 
     def set_group_chrome_visible(self, source_id: str, source_color: str, visible: bool) -> None:
@@ -189,6 +247,7 @@ class ColumnSearchPopup(QDialog):
             for row in range(self._list.count())
             if text
             and self._list.item(row).data(_SOURCE_ID_ROLE) is not None  # skip group-header rows
+            and not self._list.item(row).isHidden()  # skip columns in a collapsed group
             and text.lower() in self._list.item(row).text().lower()
         ]
         self._match_pos = 0 if self._matches else -1
@@ -448,65 +507,64 @@ class CsvPanel(QWidget):
         )
         return reply == QMessageBox.StandardButton.Yes
 
-    def load_path(
-        self,
-        path: str,
-        source_id: str | None = None,
-        label: str | None = None,
-        color: str | None = None,
-    ) -> None:
-        """Load `path` as a new source, or -- when `source_id` names an
-        already-open source -- reload that source in place (used when the
-        Header Trimming keyword list changes) without disturbing any other
-        currently open file's rows.
+    def _resolve_source_for_load(
+        self, path: str, source_id: str | None, label: str | None, color: str | None
+    ) -> DataSource:
+        """Reuse the already-open DataSource when `source_id` names one --
+        a reload in place (used when the Header Trimming keyword list
+        changes), without disturbing any other currently open file's rows
+        -- or register a brand-new one otherwise.
 
         `label`/`color` let a caller pin the exact identity a source should
         get (used when Load Layout re-opens a file that isn't open yet, so
         the reloaded source keeps the id/label/color recorded in that
         layout instead of getting a fresh random one).
         """
-        is_reload = source_id is not None and source_id in self._sources
-        if is_reload:
+        if source_id is not None and source_id in self._sources:
             source = self._sources[source_id]
             source.path = path
-        else:
-            if source_id is None:
-                source_id = uuid.uuid4().hex
-            source = DataSource(
-                id=source_id,
-                path=path,
-                label=label or self._make_unique_label(path),
-                color=color or color_for_index(len(self._sources)),
-            )
-            self._sources[source_id] = source
+            return source
+        if source_id is None:
+            source_id = uuid.uuid4().hex
+        source = DataSource(
+            id=source_id,
+            path=path,
+            label=label or self._make_unique_label(path),
+            color=color or color_for_index(len(self._sources)),
+        )
+        self._sources[source_id] = source
+        return source
 
-        self._refresh_path_label()
-        self.status_label.setText(f"Reading columns for {source.label}...")
-
-        header_trim_keywords = self._header_trim_keywords
-
+    def _peek_and_populate_columns(self, source: DataSource, path: str, header_trim_keywords: list[str]) -> bool:
+        """Read just the header (fast) and populate the column list from it
+        immediately, well before the full background parse below finishes.
+        Returns False -- having already set a status message -- if even the
+        header couldn't be read.
+        """
         try:
             names = peek_schema(path, header_trim_keywords)
         except Exception as exc:
             self.status_label.setText(f"Failed to read header: {exc}")
-            return
-
+            return False
         self.column_list.set_source_group(source, names)
         self._sync_group_chrome()
+        return True
 
-        if not self._confirm_memory_headroom(path):
-            self.status_label.setText("Load canceled -- file too large for available memory")
-            return
+    def _start_background_load(self, source: DataSource, path: str, header_trim_keywords: list[str]) -> None:
+        """Parse the full file off-thread and show a busy dialog meanwhile.
 
-        # The column list above is populated immediately, but series can't be
-        # dropped onto a subplot until the full column data has been parsed
-        # (there's nothing to plot yet) -- so a large file makes the app look
-        # briefly unresponsive to a drop with no feedback. Surface that wait
-        # explicitly with a busy dialog instead. No cancel button: polars'
-        # read_csv is one blocking call with no interruption point, so there
-        # was never a way to actually stop the parse -- only to hide the
-        # dialog and discard its result, which just hid the wait without
-        # shortening it.
+        The column list is already populated by this point (see
+        _peek_and_populate_columns), but series can't be dropped onto a
+        subplot until the full column data has been parsed (there's nothing
+        to plot yet) -- so a large file makes the app look briefly
+        unresponsive to a drop with no feedback. Surface that wait
+        explicitly with this dialog instead. No cancel button: polars'
+        read_csv is one blocking call with no interruption point, so there
+        was never a way to actually stop the parse -- only to hide the
+        dialog and discard its result, which just hid the wait without
+        shortening it.
+        """
+        source_id = source.id
         if self._progress is not None:
             self._progress.hide()
         generation = self._pending_generation.get(source_id, 0) + 1
@@ -533,6 +591,39 @@ class CsvPanel(QWidget):
         # on_error from being garbage-collected out from under the thread pool.
         self._pending_loads[(source_id, generation)] = (worker, on_finished, on_error)
         self._pool.start(worker)
+
+    def load_path(
+        self,
+        path: str,
+        source_id: str | None = None,
+        label: str | None = None,
+        color: str | None = None,
+    ) -> None:
+        """Load `path` as a new source, or -- when `source_id` names an
+        already-open source -- reload that source in place (used when the
+        Header Trimming keyword list changes) without disturbing any other
+        currently open file's rows.
+
+        `label`/`color` let a caller pin the exact identity a source should
+        get (used when Load Layout re-opens a file that isn't open yet, so
+        the reloaded source keeps the id/label/color recorded in that
+        layout instead of getting a fresh random one).
+        """
+        source = self._resolve_source_for_load(path, source_id, label, color)
+
+        self._refresh_path_label()
+        self.status_label.setText(f"Reading columns for {source.label}...")
+
+        header_trim_keywords = self._header_trim_keywords
+
+        if not self._peek_and_populate_columns(source, path, header_trim_keywords):
+            return
+
+        if not self._confirm_memory_headroom(path):
+            self.status_label.setText("Load canceled -- file too large for available memory")
+            return
+
+        self._start_background_load(source, path, header_trim_keywords)
 
     def _on_load_finished(self, source_id: str, generation: int, store: ColumnStore) -> None:
         self._pending_loads.pop((source_id, generation), None)

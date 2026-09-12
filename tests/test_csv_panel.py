@@ -6,7 +6,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox
 
 from csv_plot_maker.models.data_source import DataSource
-from csv_plot_maker.ui.csv_panel import CsvPanel
+from csv_plot_maker.ui.csv_panel import CsvPanel, _HEADER_SOURCE_ID_ROLE
 
 FIXTURE = Path(__file__).parent / "fixtures" / "small.csv"
 
@@ -157,7 +157,11 @@ def test_second_open_file_reveals_both_headers_and_colors(qtbot):
 
     panel._sync_group_chrome()
 
-    headers = [panel.column_list.item(row) for row in range(panel.column_list.count()) if panel.column_list.item(row).text().startswith("▾")]
+    headers = [
+        panel.column_list.item(row)
+        for row in range(panel.column_list.count())
+        if panel.column_list.item(row).data(_HEADER_SOURCE_ID_ROLE) is not None
+    ]
     assert len(headers) == 2
     assert all(h.isHidden() is False for h in headers)
 
@@ -178,7 +182,7 @@ def test_closing_back_down_to_one_file_hides_chrome_again(qtbot):
     remaining_header = next(
         panel.column_list.item(row)
         for row in range(panel.column_list.count())
-        if panel.column_list.item(row).text().startswith("▾")
+        if panel.column_list.item(row).data(_HEADER_SOURCE_ID_ROLE) is not None
     )
     assert remaining_header.isHidden() is True
 
@@ -199,6 +203,107 @@ def test_rename_source_updates_label_and_header_text(qtbot):
     assert panel.column_list.item(0).text() == "\u25be flight1"
     assert received == ["a"]
     assert "flight1" in panel.path_label.text()
+
+
+def test_clicking_a_header_collapses_and_expands_its_columns(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt", "spd"])
+    header = panel.column_list.item(0)
+
+    with qtbot.waitSignal(panel.column_list.itemClicked, timeout=1000):
+        QTest.mouseClick(
+            panel.column_list.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=panel.column_list.visualItemRect(header).center(),
+        )
+
+    assert header.text() == "\u25b8 a"
+    assert panel.column_list.item(1).isHidden() is True
+    assert panel.column_list.item(2).isHidden() is True
+
+    with qtbot.waitSignal(panel.column_list.itemClicked, timeout=1000):
+        QTest.mouseClick(
+            panel.column_list.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=panel.column_list.visualItemRect(header).center(),
+        )
+
+    assert header.text() == "\u25be a"
+    assert panel.column_list.item(1).isHidden() is False
+    assert panel.column_list.item(2).isHidden() is False
+
+
+def test_collapsing_a_group_clears_selection_on_its_hidden_columns(qtbot):
+    # Qt does not auto-deselect a hidden item, so a still-selected column in
+    # a collapsed (invisible) group could otherwise still be dragged out via
+    # startDrag()'s selectedItems().
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt", "spd"])
+    panel.column_list.item(1).setSelected(True)
+
+    panel.column_list.toggle_group_collapsed("a")
+
+    assert panel.column_list.selectedItems() == []
+
+
+def test_collapsed_group_columns_excluded_from_ctrl_f_search(qtbot):
+    from csv_plot_maker.ui.csv_panel import ColumnSearchPopup
+
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt", "spd"])
+    panel.column_list.toggle_group_collapsed("a")
+
+    popup = ColumnSearchPopup(panel.column_list)
+    qtbot.addWidget(popup)
+    popup._on_text_changed("alt")
+
+    assert popup._matches == []
+
+
+def test_reloading_an_open_source_preserves_collapsed_state(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt", "spd"])
+    panel.column_list.toggle_group_collapsed("a")
+
+    # Simulate a Header Trimming reload: same source_id, rebuilt rows.
+    panel.column_list.set_source_group(source, ["alt", "spd", "hdg"])
+
+    assert panel.column_list.is_group_collapsed("a") is True
+    for row in range(1, panel.column_list.count()):
+        assert panel.column_list.item(row).isHidden() is True
+
+
+def test_second_file_opening_does_not_reveal_an_already_collapsed_group(qtbot):
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source_a = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["a"] = source_a
+    panel.column_list.set_source_group(source_a, ["alt"])
+    panel.column_list.toggle_group_collapsed("a")
+
+    source_b = DataSource(id="b", path="b.csv", label="b", color="#dcfce7")
+    panel._sources["b"] = source_b
+    panel.column_list.set_source_group(source_b, ["spd"])
+    panel._sync_group_chrome()
+
+    alt_row = next(
+        row
+        for row in range(panel.column_list.count())
+        if panel.column_list.item(row).text() == "alt"
+    )
+    assert panel.column_list.item(alt_row).isHidden() is True
 
 
 def test_rename_source_ignores_cancel(qtbot):
