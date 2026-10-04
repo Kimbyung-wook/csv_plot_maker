@@ -1,18 +1,30 @@
 """Single source of truth for the version/build-date shown in the window title.
 
-Keep __version__ in sync with pyproject.toml's [project].version, and bump
-BUILD_DATE whenever a new standalone executable is built (see scripts in the
-project root / DESIGN.md appendix A for the PyInstaller build command).
+Keep __version__ in sync with pyproject.toml's [project].version. BUILD_DATE
+is stamped automatically with today's date by "CSV Plot Maker.spec" every
+time a standalone executable is built from it (see README.md's build
+section) -- no manual edit needed for that part; the value checked in here
+is only what a plain `uv run python -m csv_plot_maker.main` (not a built
+.exe) shows.
 """
 
-__version__ = "1.9.0"
-BUILD_DATE = "2026-09-11"
+__version__ = "1.9.1"
+BUILD_DATE = "2026-10-04"
 
 # (version, date, bullet points) -- newest first, shown verbatim in
 # Info > Version History (see ui/version_history_dialog.py). Add a new entry
 # here whenever __version__ is bumped; keep each bullet short (개조식) rather
 # than a full sentence.
 VERSION_HISTORY: list[tuple[str, str, list[str]]] = [
+    (
+        "1.9.1",
+        "2026-10-04",
+        [
+            "좌측 Data 패널에서 이미 다른 subplot에 있는 컬럼을 또 다른 subplot으로 드래그하면 원본이 사라지던 문제 수정 (이제는 그대로 두고 복사 추가됨)",
+            "우측 시리즈 목록에서 드래그로 다른 subplot에 옮길 때, 실제 마우스 드래그에서는 간혹 이동이 아니라 복사로 처리되던 문제 수정",
+            "실행 파일(.exe) 빌드 시 빌드일자가 자동으로 기록되도록 변경 (수동 수정 불필요)",
+        ],
+    ),
     (
         "1.9.0",
         "2026-09-11",

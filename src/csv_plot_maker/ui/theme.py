@@ -55,6 +55,15 @@ def apply_app_theme(app: QApplication, mode: str) -> tuple[str, str]:
     (background, foreground) colors the caller should push into the plot
     grid separately (PlotGridWidget.set_theme_colors).
     """
+    if mode == "system":
+        # Release any color-scheme override an earlier explicit Light/Dark
+        # selection left behind (see below) *before* resolving, so
+        # resolve_mode() reads the OS's actual current setting again instead
+        # of whatever this function last forced it to.
+        try:
+            app.styleHints().setColorScheme(Qt.ColorScheme.Unknown)
+        except Exception:
+            pass
     resolved = resolve_mode(mode)
     # Only apply the style once, ever -- re-calling QApplication.setStyle()
     # with the *same* style on every theme switch is redundant (only the
@@ -67,6 +76,21 @@ def apply_app_theme(app: QApplication, mode: str) -> tuple[str, str]:
     # the style was already "Fusion" from the first call.
     if app.style().objectName().lower() != "fusion":
         app.setStyle("Fusion")
+    # Explicitly pin Qt's own notion of the *current* color scheme to
+    # whatever we just resolved, rather than leaving it tracking the OS
+    # setting. Since Qt 6.5, Fusion (and some native dialogs/window chrome,
+    # e.g. Windows' dark title bar) can react to
+    # QGuiApplication.styleHints().colorScheme() on its own, independently of
+    # the QPalette we set below -- if that hint still says "the OS is dark"
+    # while the user forced Light mode here, only the pieces of the UI that
+    # strictly follow our explicit QPalette (like this app's own plot colors,
+    # pushed separately via PlotGridWidget.set_theme_colors) reliably match
+    # the forced mode, while anything Qt derives from the stale hint doesn't.
+    # Pinning this removes that disagreement instead of leaving it to chance.
+    try:
+        app.styleHints().setColorScheme(Qt.ColorScheme.Dark if resolved == "dark" else Qt.ColorScheme.Light)
+    except Exception:
+        pass
     if resolved == "dark":
         app.setPalette(_dark_palette())
         return DARK_PLOT_BACKGROUND, DARK_PLOT_FOREGROUND

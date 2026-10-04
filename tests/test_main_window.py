@@ -162,6 +162,36 @@ def test_dropping_a_column_already_in_the_active_subplot_moves_it_to_the_target(
     assert moved_series.axis == "secondary"
 
 
+def test_dropping_a_column_from_the_data_tab_onto_another_subplot_duplicates_instead_of_moving(qtbot):
+    # Regression test: dragging a column out of the Data tab's raw column
+    # list (DraggableColumnList, move=False) onto a subplot where that
+    # column is already plotted elsewhere must add a second copy there and
+    # leave the original subplot untouched -- it must NOT behave like the
+    # move above, which is reserved for dragging an already-placed series
+    # out of the series list (SeriesListWidget, move=True).
+    win = MainWindow()
+    qtbot.addWidget(win)
+    source = _install_store(
+        win,
+        _store_with(
+            sparse_col=np.array([np.nan, 1.0]),
+            dense_col=np.array([1.0, 2.0]),
+        ),
+    )
+    win.project.resize_grid(1, 2)
+    win.plot_grid.rebuild(1, 2)
+
+    subplot_a = win._active_subplot()
+    subplot_b = next(sp for sp in win.project.subplots if sp.id != subplot_a.id)
+    win._on_column_dropped(subplot_a.row, subplot_a.col, source.id, "dense", move=False)
+    assert [s.y_column for s in subplot_a.series] == ["dense"]
+
+    win._on_column_dropped(subplot_b.row, subplot_b.col, source.id, "dense", move=False)
+
+    assert [s.y_column for s in subplot_a.series] == ["dense"]
+    assert [s.y_column for s in subplot_b.series] == ["dense"]
+
+
 def test_dropping_a_column_back_onto_its_own_subplot_still_allows_a_duplicate(qtbot):
     win = MainWindow()
     qtbot.addWidget(win)
@@ -205,6 +235,39 @@ def test_dropping_a_column_present_in_multiple_subplots_is_left_ambiguous_and_no
     assert [s.y_column for s in first.series] == ["dense"]
     assert [s.y_column for s in second.series] == ["dense"]
     assert [s.y_column for s in third.series] == ["dense"]
+
+
+def test_dropping_a_series_id_moves_that_exact_series_even_when_the_column_is_ambiguous(qtbot):
+    # Regression test: when the same column is already plotted in more than
+    # one other subplot, _find_series_to_move's (source, column) match alone
+    # is ambiguous and refuses to move anything (see the test above). A real
+    # drag from the series list (SeriesListWidget) always supplies the exact
+    # series_id being dragged, though -- see column_drag.start_column_drag --
+    # which must let the move succeed unambiguously regardless of how many
+    # other subplots also happen to have that column.
+    win = MainWindow()
+    qtbot.addWidget(win)
+    source = _install_store(
+        win,
+        _store_with(
+            sparse_col=np.array([np.nan, 1.0]),
+            dense_col=np.array([1.0, 2.0]),
+        ),
+    )
+    win.project.resize_grid(1, 3)
+    win.plot_grid.rebuild(1, 3)
+    first, second, third = win.project.subplots
+    first_series = Series(y_column="dense", source_id=source.id)
+    first.add_series(first_series)
+    second.add_series(Series(y_column="dense", source_id=source.id))
+
+    win._on_column_dropped(third.row, third.col, source.id, "dense", move=True, series_id=first_series.id)
+
+    # Only the one named series_id moved -- the other copy, and everything
+    # else, is untouched.
+    assert [s.y_column for s in first.series] == []
+    assert [s.y_column for s in second.series] == ["dense"]
+    assert [s.id for s in third.series] == [first_series.id]
 
 
 def test_dropping_columns_from_two_different_files_into_the_same_subplot_both_survive(qtbot):

@@ -396,3 +396,30 @@ def test_confirm_memory_headroom_fails_open_on_missing_file(qtbot):
     # must not block the load itself (load_path's own peek_schema() is the
     # thing that will actually report a missing/unreadable file).
     assert panel._confirm_memory_headroom(r"C:\does\not\exist.csv") is True
+
+
+def test_drag_from_the_column_list_signals_add_not_move(qtbot):
+    # Dragging a raw column out of the Data tab must never read as "move an
+    # existing series" -- even if that column is already plotted in another
+    # subplot, this list is for adding, not relocating (relocating is
+    # SeriesListWidget's job -- see test_series_panel.py's counterpart).
+    panel = CsvPanel()
+    qtbot.addWidget(panel)
+    source = DataSource(id="a", path="a.csv", label="a", color="#dbeafe")
+    panel._sources["a"] = source
+    panel.column_list.set_source_group(source, ["alt", "spd"])
+    item = next(
+        panel.column_list.item(row)
+        for row in range(panel.column_list.count())
+        if panel.column_list.item(row).text() == "alt"
+    )
+    item.setSelected(True)
+
+    captured = {}
+    with patch("csv_plot_maker.ui.column_drag.QDrag") as mock_drag_cls:
+        mock_drag_cls.return_value.setMimeData.side_effect = lambda mime: captured.update(text=mime.text())
+        panel.column_list.startDrag(Qt.DropAction.CopyAction)
+
+    # Leading "0" means add, not move; trailing empty field is the
+    # (absent) series_id -- the Data tab isn't dragging a placed series.
+    assert captured["text"] == "0\ta\talt\t"

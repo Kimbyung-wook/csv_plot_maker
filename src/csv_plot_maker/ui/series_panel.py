@@ -53,7 +53,18 @@ class SeriesListWidget(QListWidget):
 
     def startDrag(self, supportedActions) -> None:
         items = self.selectedItems()
-        start_column_drag(self, [(item.data(_SOURCE_ID_ROLE), item.data(_Y_COLUMN_ROLE)) for item in items])
+        # move=True: every row here is already a placed series, so dragging
+        # one onto another subplot reads as relocating it there. Also pass
+        # each row's series_id so the drop target can relocate that exact
+        # series even if the same column is plotted in more than one other
+        # subplot already -- matching by (source, column) alone would be
+        # ambiguous in that case.
+        start_column_drag(
+            self,
+            [(item.data(_SOURCE_ID_ROLE), item.data(_Y_COLUMN_ROLE)) for item in items],
+            move=True,
+            series_ids=[item.data(Qt.ItemDataRole.UserRole) for item in items],
+        )
 
 
 class SeriesPanel(QWidget):

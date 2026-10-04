@@ -90,7 +90,11 @@ class DraggableColumnList(QListWidget):
 
     def startDrag(self, supportedActions) -> None:
         items = self.selectedItems()
-        start_column_drag(self, [(item.data(_SOURCE_ID_ROLE), item.text()) for item in items])
+        # move=False: dragging a raw column out of the Data tab always means
+        # "add this", even if that column is already plotted in another
+        # subplot -- relocating an existing series is SeriesListWidget's job
+        # (move=True there), not this list's.
+        start_column_drag(self, [(item.data(_SOURCE_ID_ROLE), item.text()) for item in items], move=False)
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
         source_id = item.data(_HEADER_SOURCE_ID_ROLE)

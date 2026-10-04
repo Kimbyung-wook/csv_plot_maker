@@ -664,17 +664,35 @@ class MainWindow(QMainWindow):
             f"Applied to {count} other series from {self._source_label(series.source_id)}"
         )
 
-    def _find_series_to_move(self, subplot: SubplotConfig, source_id: str, column_name: str) -> tuple[SubplotConfig, Series] | None:
+    def _find_series_to_move(
+        self, subplot: SubplotConfig, source_id: str, column_name: str, series_id: str = ""
+    ) -> tuple[SubplotConfig, Series] | None:
         """A column already plotted in a *different* subplot gets moved to the
         drop target instead of duplicated there -- dragging it onto another
         subplot reads as "move this series here", not "add a second copy".
-        Dropping it back onto the subplot it's already in is unaffected
-        (duplicate series within one subplot are allowed by design, see
-        DraggableColumnList's docstring); a column already plotted in more
-        than one subplot is left alone too, since which copy to move would
-        be ambiguous. Matched by (source, column) together, so the same
-        column name in a *different* file is never mistaken for this one.
+        Only called for a move-intent drop (see _on_column_dropped) -- a drag
+        out of the Data tab's raw column list always adds instead, even when
+        this would otherwise match, since that list isn't dragging an
+        already-placed series in the first place.
+
+        `series_id`, when given (a real drag from the series list always
+        supplies it -- see column_drag.start_column_drag), picks out that
+        *exact* series: unambiguous even if the same column is already
+        plotted in more than one other subplot, since the drag names which
+        placed series it's dragging, not just which column. Without it
+        (direct calls, e.g. from tests), falls back to matching by (source,
+        column) together, which stays ambiguous -- and so leaves every
+        copy alone -- once more than one other subplot has a match, since
+        which one to move would otherwise be a guess.
         """
+        if series_id:
+            for sp in self.project.subplots:
+                if sp.id == subplot.id:
+                    continue
+                series = sp.get_series(series_id)
+                if series is not None:
+                    return sp, series
+            return None
         matches = [
             (sp, s)
             for sp in self.project.subplots
@@ -704,7 +722,15 @@ class MainWindow(QMainWindow):
             line_style="none" if sparse else "solid",
         )
 
-    def _on_column_dropped(self, row: int, col: int, source_id: str, column_name: str) -> None:
+    def _on_column_dropped(
+        self,
+        row: int,
+        col: int,
+        source_id: str,
+        column_name: str,
+        move: bool = True,
+        series_id: str = "",
+    ) -> None:
         source = self.data_sources.get(source_id)
         if source is None or source.store is None:
             self.statusBar().showMessage("Still loading the CSV -- please wait before adding series")
@@ -715,7 +741,10 @@ class MainWindow(QMainWindow):
         if subplot is None:
             return
 
-        match = self._find_series_to_move(subplot, source_id, column_name)
+        # `move` is False only for a drag out of the Data tab's raw column
+        # list (see column_drag.start_column_drag) -- that always adds,
+        # never relocates, even if the column is already plotted elsewhere.
+        match = self._find_series_to_move(subplot, source_id, column_name, series_id) if move else None
         moved_from: tuple[int, int] | None = None
         if match is not None:
             # Move the existing Series object itself rather than deleting it

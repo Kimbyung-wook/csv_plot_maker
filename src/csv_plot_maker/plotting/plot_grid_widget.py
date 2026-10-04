@@ -17,7 +17,7 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
     """
 
     subplot_clicked = Signal(int, int)  # row, col
-    column_dropped = Signal(int, int, str, str)  # row, col, source_id, column name
+    column_dropped = Signal(int, int, str, str, bool, str)  # row, col, source_id, column, move_intent, series_id
     axis_label_double_clicked = Signal(int, int, str)  # row, col, "bottom"/"left"/"right"
 
     # Always-reserved px of room for a Y-axis title, whether or not a
@@ -370,12 +370,18 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
 
     def dropEvent(self, event) -> None:
         # A multi-selected drag (Ctrl/Shift-click in the column list) carries
-        # one "source_id\tcolumn_name" pair per line -- add them all at once.
+        # one "move_flag\tsource_id\tcolumn_name\tseries_id" line per pair --
+        # add them all at once. move_flag ("1"/"0", see
+        # column_drag.start_column_drag) is "1" from the series list
+        # (relocating an already-placed series -- series_id then names which
+        # exact one), "0" from the Data tab (adding a column, even one
+        # already plotted elsewhere; series_id is empty) -- see
+        # MainWindow._on_column_dropped for how this changes drop handling.
         lines = [line for line in event.mimeData().text().split("\n") if line]
         scene_pos = self.mapToScene(event.position().toPoint())
         rc = self._view_at_scene_pos(scene_pos)
         if rc is not None and lines:
             for line in lines:
-                source_id, _sep, column = line.partition("\t")
-                self.column_dropped.emit(rc[0], rc[1], source_id, column)
+                move_flag, source_id, column, series_id = line.split("\t", 3)
+                self.column_dropped.emit(rc[0], rc[1], source_id, column, move_flag == "1", series_id)
             event.acceptProposedAction()

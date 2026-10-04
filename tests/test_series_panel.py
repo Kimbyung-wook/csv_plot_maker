@@ -68,7 +68,11 @@ def test_drag_exports_the_y_column_of_every_selected_series(qtbot):
         mock_drag_cls.return_value.setMimeData.side_effect = lambda mime: captured.update(text=mime.text())
         panel.series_list.startDrag(Qt.DropAction.CopyAction)
 
-    assert captured["text"] == "src1\ttemp\nsrc2\tpressure"
+    # Every row here is an already-placed series, so dragging it onto
+    # another subplot must read as relocating it there ("1"), not
+    # duplicating it -- and each line names its own series_id so the drop
+    # target can relocate that exact series unambiguously.
+    assert captured["text"] == "1\tsrc1\ttemp\tid1\n1\tsrc2\tpressure\tid2"
 
 
 def test_click_drag_does_not_extend_the_selection(qtbot):
