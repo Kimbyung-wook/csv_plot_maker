@@ -329,13 +329,12 @@ class MainWindow(QMainWindow):
         """
         return self.project.prune_invalid_series(self.data_sources)
 
-    def _reconcile_project_data_sources(self) -> None:
-        """See ProjectState.reconcile_data_sources; queues an auto-reopen
-        (preserving its original id/label/color) for every file it reports
-        as still needing to be loaded.
+    def _reconcile_project_data_sources(self) -> int:
+        """See ProjectState.reconcile_data_sources. Returns how many series
+        it dropped because the layout referenced more files than are
+        currently open.
         """
-        for ref in self.project.reconcile_data_sources(self.data_sources):
-            self.csv_panel.load_path(ref.path, source_id=ref.id, label=ref.label, color=ref.color)
+        return self.project.reconcile_data_sources(self.data_sources)
 
     def _remove_series_from(self, subplot: SubplotConfig, series_id: str) -> None:
         subplot.remove_series(series_id)
@@ -373,6 +372,7 @@ class MainWindow(QMainWindow):
         self.data_sources[source.id] = source
 
         loaded_saved_layout = False
+        reconciled_dropped = 0
         config_path = None
         if is_first_source:
             # Always start from a clean single-subplot grid for the very
@@ -392,9 +392,9 @@ class MainWindow(QMainWindow):
             self.project.csv_path = source.path
             self.plot_grid.rebuild(self.project.grid_rows, self.project.grid_cols)
             if loaded_saved_layout:
-                self._reconcile_project_data_sources()
+                reconciled_dropped = self._reconcile_project_data_sources()
 
-        dropped = self._prune_invalid_references()
+        dropped = self._prune_invalid_references() + reconciled_dropped
         self._finish_loading_project(restore_saved_ranges=is_first_source and loaded_saved_layout)
 
         store = source.store
@@ -406,7 +406,7 @@ class MainWindow(QMainWindow):
         if is_first_source and loaded_saved_layout:
             message += f" -- restored layout from {config_path.name}"
         if dropped:
-            message += f" ({dropped} series dropped: column not found)"
+            message += f" ({dropped} series dropped: no longer valid)"
         self.statusBar().showMessage(message)
 
     def _finish_loading_project(self, restore_saved_ranges: bool) -> None:
@@ -880,20 +880,21 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Failed to load layout: {exc}")
             return
 
-        # A layout's JSON is portable -- it names files/columns by path and
-        # string, not by any position specific to one app session -- so it
-        # can be reused as long as the same files are (or can be) open.
-        # Keep pointing at whatever CSV Save Layout would currently target,
-        # same as before this project object gets replaced.
+        # A layout is a reusable template -- its subplot grid and per-file
+        # series get remapped by position onto whichever files are
+        # currently open (see ProjectState.reconcile_data_sources), which is
+        # exactly what lets the same layout be applied to a different CSV
+        # than it was originally saved against. Keep pointing at whatever
+        # CSV Save Layout would currently target, same as before this
+        # project object gets replaced.
         project.csv_path = self.project.csv_path
         self.project = project
-        self._reconcile_project_data_sources()
-        dropped = self._prune_invalid_references()
+        dropped = self._reconcile_project_data_sources() + self._prune_invalid_references()
 
         self.plot_grid.rebuild(self.project.grid_rows, self.project.grid_cols)
         self._finish_loading_project(restore_saved_ranges=True)
 
         message = f"Loaded layout from {Path(path).name}"
         if dropped:
-            message += f" ({dropped} series dropped: column not found in the currently open files)"
+            message += f" ({dropped} series dropped: no longer valid)"
         self.statusBar().showMessage(message)

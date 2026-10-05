@@ -1,10 +1,12 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PySide6.QtCore import Qt
 
 from csv_plot_maker.data.column_store import ColumnStore
 from csv_plot_maker.models.data_source import DataSource, SourceRef
+from csv_plot_maker.models.project import ProjectState
 from csv_plot_maker.models.serialization import save_project
 from csv_plot_maker.models.series import Series
 from csv_plot_maker.ui.main_window import MainWindow
@@ -793,18 +795,71 @@ def test_on_all_files_closed_resets_to_a_blank_single_subplot_grid(qtbot):
     assert win.project.subplots[0].series == []
 
 
-def test_reconcile_project_data_sources_remaps_old_ids_by_matching_path(qtbot):
+def test_reconcile_project_data_sources_remaps_old_ids_by_position(qtbot):
+    # The old ref's path ("b.csv") deliberately does NOT match the
+    # currently open file's path ("a.csv") -- position in open order is
+    # what decides the remap, not the path. This is also the fix for the
+    # reported bug: loading a layout saved against one CSV must apply to a
+    # *different* CSV already open, not go fetch the old one from disk.
     win = MainWindow()
     qtbot.addWidget(win)
     source_a = _install_store(win, _store_with(np.array([np.nan, 1.0]), np.array([1.0, 2.0])), "new-id")
     source_a.path = "a.csv"
     subplot = win._active_subplot()
     subplot.add_series(Series(y_column="dense", source_id="old-id", x_column="Sequential"))
-    win.project.data_sources = [SourceRef(id="old-id", path="a.csv", label="a", color="#dbeafe")]
+    win.project.data_sources = [SourceRef(id="old-id", path="b.csv", label="b", color="#dbeafe")]
 
-    win._reconcile_project_data_sources()
+    dropped = win._reconcile_project_data_sources()
 
     assert subplot.series[0].source_id == "new-id"
+    assert dropped == 0
+
+
+def test_reconcile_project_data_sources_maps_multiple_sources_by_open_order(qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    source_a = _install_store(win, _store_with(np.array([np.nan, 1.0]), np.array([1.0, 2.0])), "new-a")
+    source_b = _install_store(win, _store_with(np.array([np.nan, 1.0]), np.array([3.0, 4.0])), "new-b")
+    subplot = win._active_subplot()
+    series_from_first = Series(y_column="dense", source_id="old-a")
+    series_from_second = Series(y_column="dense", source_id="old-b")
+    subplot.add_series(series_from_first)
+    subplot.add_series(series_from_second)
+    win.project.data_sources = [
+        SourceRef(id="old-a", path="unrelated-1.csv", label="old-a", color="#111111"),
+        SourceRef(id="old-b", path="unrelated-2.csv", label="old-b", color="#222222"),
+    ]
+
+    dropped = win._reconcile_project_data_sources()
+
+    assert series_from_first.source_id == source_a.id
+    assert series_from_second.source_id == source_b.id
+    assert dropped == 0
+
+
+def test_reconcile_project_data_sources_drops_series_for_a_file_that_is_not_open(qtbot):
+    # The layout references two files; only one is currently open. The
+    # second old source has no same-position counterpart to remap onto and
+    # can never resolve -- it must be dropped, not silently left dangling,
+    # and it must NOT trigger re-opening "unrelated-2.csv" from disk.
+    win = MainWindow()
+    qtbot.addWidget(win)
+    source_a = _install_store(win, _store_with(np.array([np.nan, 1.0]), np.array([1.0, 2.0])), "new-a")
+    subplot = win._active_subplot()
+    kept_series = Series(y_column="dense", source_id="old-a")
+    dropped_series = Series(y_column="dense", source_id="old-b")
+    subplot.add_series(kept_series)
+    subplot.add_series(dropped_series)
+    win.project.data_sources = [
+        SourceRef(id="old-a", path="unrelated-1.csv", label="old-a", color="#111111"),
+        SourceRef(id="old-b", path="unrelated-2.csv", label="old-b", color="#222222"),
+    ]
+
+    dropped = win._reconcile_project_data_sources()
+
+    assert kept_series.source_id == source_a.id
+    assert subplot.series == [kept_series]
+    assert dropped == 1
 
 
 def test_old_style_global_link_x_axes_migrates_to_every_subplot_linked(qtbot, tmp_path):
@@ -825,6 +880,80 @@ def test_old_style_global_link_x_axes_migrates_to_every_subplot_linked(qtbot, tm
     win._load_layout_from_path(str(path))
 
     assert all(sp.link_x_axis for sp in win.project.subplots)
+
+
+def test_loading_a_layout_applies_to_a_different_currently_open_csv_without_reopening_the_old_one(
+    qtbot, tmp_path
+):
+    # Regression test for the reported bug: a layout saved against one CSV,
+    # then loaded while a *different* CSV is open, must apply its subplot
+    # structure to that different (currently open) CSV -- not silently
+    # reopen the original CSV it was saved against from disk.
+    win = MainWindow()
+    qtbot.addWidget(win)
+    original_source = _install_store(
+        win, _store_with(np.array([np.nan, 1.0]), np.array([1.0, 2.0])), "original-id"
+    )
+    original_source.path = str(tmp_path / "original.csv")
+    subplot = win._active_subplot()
+    subplot.add_series(Series(y_column="dense", source_id=original_source.id, x_column="Sequential"))
+    win._capture_data_source_refs()
+    path = tmp_path / "layout.json"
+    save_project(win.project, str(path))
+
+    # Start a fresh session with a *different* CSV already open under a
+    # new id, as if the user had closed "original.csv" and opened another
+    # file before loading this saved layout.
+    win2 = MainWindow()
+    qtbot.addWidget(win2)
+    new_source = _install_store(
+        win2, _store_with(np.array([np.nan, 1.0]), np.array([5.0, 6.0])), "new-id"
+    )
+    new_source.path = str(tmp_path / "different.csv")
+    win2.project.resize_grid(1, 1)
+    win2.plot_grid.rebuild(1, 1)
+
+    with patch.object(win2.csv_panel, "load_path") as mock_load_path:
+        win2._load_layout_from_path(str(path))
+
+    mock_load_path.assert_not_called()
+    assert set(win2.data_sources) == {"new-id"}
+    moved_series = win2._active_subplot().series[0]
+    assert moved_series.source_id == "new-id"
+
+
+def test_opening_a_csv_with_a_sidecar_layout_does_not_reopen_files_it_referenced(qtbot, tmp_path):
+    # Opening a CSV auto-restores the .json sitting beside it. That layout
+    # may reference other files that were open when it was saved -- those
+    # must not be pulled back in from disk; the first file opened maps onto
+    # the first old reference, and the rest are dropped.
+    win = MainWindow()
+    qtbot.addWidget(win)
+    project = ProjectState(grid_rows=1, grid_cols=1)
+    project.build_default_grid()
+    project.data_sources = [
+        SourceRef(id="old-a", path="old-a.csv", label="old-a", color="#111111"),
+        SourceRef(id="old-b", path=str(tmp_path / "old-b.csv"), label="old-b", color="#222222"),
+    ]
+    subplot = project.subplots[0]
+    subplot.add_series(Series(y_column="dense", source_id="old-a", x_column="Sequential"))
+    subplot.add_series(Series(y_column="dense", source_id="old-b", x_column="Sequential"))
+    csv_path = tmp_path / "foo.csv"
+    save_project(project, str(csv_path.with_suffix(".json")))
+
+    source = DataSource(
+        id="new-id",
+        path=str(csv_path),
+        label="foo",
+        color="#dbeafe",
+        store=_store_with(sparse_col=np.array([np.nan, 1.0]), dense_col=np.array([1.0, 2.0])),
+    )
+    with patch.object(win.csv_panel, "load_path") as mock_load_path:
+        win._on_csv_loaded(source)
+
+    mock_load_path.assert_not_called()
+    assert set(win.data_sources) == {"new-id"}
+    assert [(s.source_id, s.y_column) for s in win.project.subplots[0].series] == [("new-id", "dense")]
 
 
 def test_data_source_registries_stay_in_sync_across_load_and_close(qtbot):

@@ -16,11 +16,12 @@ class ProjectState:
     active_subplot_id: str | None = None
     subplots: list[SubplotConfig] = field(default_factory=list)
     legend_font_size: int = 9
-    # Every open file's identity (id/path/label/color) at the time this
-    # project was saved, so Load Layout can re-open exactly the same files
-    # under the same ids/colors instead of leaving every subplot/series'
-    # source_id dangling. Absent (empty) for a single-CSV-era layout saved
-    # before this existed.
+    # Every open file's identity (id/label/color; path is informational
+    # only) at the time this project was saved, in open order, so
+    # reconcile_data_sources() can remap every subplot/series' source_id
+    # onto whichever files are open *now* by that same position -- see its
+    # docstring. Absent (empty) for a single-CSV-era layout saved before
+    # this existed.
     data_sources: list[SourceRef] = field(default_factory=list)
 
     def build_default_grid(self) -> None:
@@ -103,28 +104,38 @@ class ProjectState:
             subplot.series = kept
         return dropped
 
-    def reconcile_data_sources(self, open_sources: dict[str, DataSource]) -> list[SourceRef]:
-        """After this project has just been loaded from a saved layout, match
-        every source it references (self.data_sources) against the files
-        already open (by path, since ids are assigned fresh each session) --
-        remapping old ids in every subplot's series to whichever
-        currently-open source shares that path.
+    def reconcile_data_sources(self, open_sources: dict[str, DataSource]) -> int:
+        """After this project has just been loaded from a saved layout,
+        remap every source it references (self.data_sources) onto whichever
+        files are *currently* open -- by position (the Nth file this layout
+        was saved against maps onto the Nth file open now, in open order),
+        not by matching the old file's path. A layout is meant to be reused
+        as a template ("this many files, arranged like this") against
+        whatever's open now, which is routinely a different file than it
+        was first saved against -- so the old path is never used to go
+        reopen that original file from disk; that would silently pull in a
+        file the user never asked to open just because some old layout
+        happened to reference it.
 
-        Returns the SourceRefs that still need to be (re)opened, each
-        carrying its original id/label/color so subplot/series references
-        resolve once it loads -- actually loading them is the caller's job,
-        since this model has no notion of how a file gets opened.
+        If this layout references *more* files than are currently open,
+        the extra ones have no current counterpart to remap onto and can
+        never resolve -- every series naming one of them is dropped
+        outright rather than left dangling forever (unlike
+        prune_invalid_series, which assumes the source might just still be
+        loading). If it references fewer, the extra currently-open files
+        simply aren't part of the layout and are left untouched.
+
+        Returns how many series were dropped for that reason.
         """
-        open_by_path = {s.path: s.id for s in open_sources.values()}
+        open_ids = list(open_sources.keys())
         id_remap: dict[str, str] = {}
-        to_load: list[SourceRef] = []
-        for ref in self.data_sources:
-            matched_id = open_by_path.get(ref.path)
-            if matched_id is not None:
-                if matched_id != ref.id:
-                    id_remap[ref.id] = matched_id
-            elif ref.id not in open_sources:
-                to_load.append(ref)
+        unmapped_ids: set[str] = set()
+        for i, ref in enumerate(self.data_sources):
+            if i < len(open_ids):
+                if ref.id != open_ids[i]:
+                    id_remap[ref.id] = open_ids[i]
+            else:
+                unmapped_ids.add(ref.id)
 
         if not self.data_sources and open_sources:
             # Pre-multi-CSV layout: every series/x-column implicitly
@@ -139,4 +150,10 @@ class ProjectState:
                 for series in subplot.series:
                     series.source_id = id_remap.get(series.source_id, series.source_id)
 
-        return to_load
+        dropped = 0
+        if unmapped_ids:
+            for subplot in self.subplots:
+                kept = [s for s in subplot.series if s.source_id not in unmapped_ids]
+                dropped += len(subplot.series) - len(kept)
+                subplot.series = kept
+        return dropped
