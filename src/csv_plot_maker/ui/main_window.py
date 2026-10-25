@@ -5,7 +5,16 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QActionGroup
-from PySide6.QtWidgets import QApplication, QDockWidget, QFileDialog, QInputDialog, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDockWidget,
+    QFileDialog,
+    QInputDialog,
+    QMainWindow,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from csv_plot_maker._version import BUILD_DATE, __version__
 from csv_plot_maker.models.data_source import DataSource, SourceRef
@@ -854,9 +863,14 @@ class MainWindow(QMainWindow):
         save_project(self.project, path)
         self.statusBar().showMessage(f"Saved layout to {Path(path).name}")
 
+    def _warn_load_csv_first(self) -> None:
+        # A layout is applied onto the currently open CSV(s) and never opens
+        # files by itself, so without one there is nothing for it to map onto.
+        QMessageBox.warning(self, "Load Layout", "Load a CSV file first, then load the layout.")
+
     def _on_load_config(self) -> None:
         if not self.project.csv_path:
-            self.statusBar().showMessage("Load a CSV first")
+            self._warn_load_csv_first()
             return
         config_path = config_path_for_csv(self.project.csv_path)
         if not config_path.exists():
@@ -866,7 +880,7 @@ class MainWindow(QMainWindow):
 
     def _on_load_config_as(self) -> None:
         if not self.project.csv_path:
-            self.statusBar().showMessage("Load a CSV first")
+            self._warn_load_csv_first()
             return
         path, _ = QFileDialog.getOpenFileName(self, "Load Layout As", "", "JSON Files (*.json)")
         if not path:

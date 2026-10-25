@@ -977,3 +977,15 @@ def test_data_source_registries_stay_in_sync_across_load_and_close(qtbot):
     win.csv_panel.close_source(source_id)
 
     assert set(win.data_sources.keys()) == set(win.csv_panel._sources.keys()) == set()
+
+
+def test_load_layout_without_csv_warns_and_opens_no_dialog(qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    with patch("csv_plot_maker.ui.main_window.QMessageBox.warning") as warning, patch(
+        "csv_plot_maker.ui.main_window.QFileDialog.getOpenFileName"
+    ) as open_dialog:
+        win._on_load_config()
+        win._on_load_config_as()
+    assert warning.call_count == 2
+    open_dialog.assert_not_called()

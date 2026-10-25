@@ -10,4 +10,3 @@ __pycache__/
 build/
 dist/
 tests/test_theme.py
-CSV Plot Maker.spec

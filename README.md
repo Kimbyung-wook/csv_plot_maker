@@ -2,7 +2,7 @@
 
 CSV 데이터를 불러와 여러 개의 subplot으로 구성된 그래프를 그리는 데스크톱 분석 도구입니다. 여러 CSV 파일을 동시에 열어 파일별로 색이 구분된 데이터를 한 subplot에도 자유롭게 섞어 비교할 수 있고, 컬럼을 여러 subplot에 중복 선택해 시리즈로 추가하고, 시리즈별 색상/선모양/마커/굵기를 즉시 바꾸고, subplot마다 이중 Y축과 축 라벨을 설정할 수 있습니다. 수십만~수백만 행 규모의 CSV도 빠르게 로딩·렌더링하도록 만들어졌습니다.
 
-**현재 버전: v1.9.2** (2026-10-05) — 버전별 변경 이력은 프로그램의 Info → Version History 메뉴 참고.
+**현재 버전: v1.9.3** (2026-10-25) — 버전별 변경 이력은 프로그램의 Info → Version History 메뉴 참고.
 
 **프로그램 사용 방법(화면 구성, CSV 불러오기, 데이터 추가, 축/스타일 설정, 레이아웃 저장 등)은 [howtouse.md](howtouse.md)를 참고하세요.** 전체 요구사항과 설계 배경은 [DESIGN.md](DESIGN.md)를 참고하세요.
 
@@ -50,14 +50,15 @@ uv run python scripts/gen_synthetic_csv.py
 
 ```powershell
 uv add --dev pyinstaller   # 최초 1회
-uv run pyinstaller --name "CSV Plot Maker" --windowed --onedir --noconfirm --clean --paths src src\csv_plot_maker\main.py
-uv run pyinstaller --name "CSV Plot Maker" --windowed --onefile --noconfirm --clean --paths src src\csv_plot_maker\main.py
+uv run pyinstaller "CSV Plot Maker.spec" --noconfirm --clean              # onedir (기본)
+uv run pyinstaller "CSV Plot Maker.spec" --noconfirm --clean -- --onefile  # 단일 실행 파일
 ```
 
-- `--onedir`: 실행 파일 하나가 아니라 exe + 의존 파일 폴더로 생성합니다. PySide6가 LGPLv3이므로 `--onefile`로 모든 것을 하나의 실행 파일에 정적으로 압축하면 라이선스 경계가 모호해질 수 있어 onedir을 기본으로 사용합니다.
-- 결과물은 `dist\CSV Plot Maker\CSV Plot Maker.exe`이며, `dist\CSV Plot Maker` 폴더 전체를 그대로 옮기면 Python 설치 없이 다른 Windows PC에서도 실행됩니다.
-- 재빌드 시 프로젝트 루트의 `CSV Plot Maker.spec` 파일로도 동일한 설정으로 다시 빌드할 수 있습니다: `uv run pyinstaller "CSV Plot Maker.spec" --noconfirm --clean`
-- `BUILD_DATE`(창 제목에 표시되는 빌드일자)는 위 `.spec` 빌드 시 오늘 날짜로 자동 기록되므로 더 이상 수동으로 갱신할 필요가 없습니다 -- `CSV Plot Maker.spec` 맨 위에서 빌드할 때마다 `src/csv_plot_maker/_version.py`를 직접 고쳐씁니다. (최초 1회만 돌리는 위 `--onedir` 명령은 `.spec`을 아직 안 거치므로 이 자동 기록은 재빌드부터 적용됩니다.)
+- 빌드 설정은 저장소에 포함된 `CSV Plot Maker.spec` 하나에 들어 있으며, 기본은 **onedir** 형식입니다: 실행 파일 하나가 아니라 exe + 의존 파일 폴더로 생성합니다. PySide6가 LGPLv3이므로 `--onefile`로 모든 것을 하나의 실행 파일에 정적으로 압축하면 라이선스 경계가 모호해질 수 있어 onedir을 기본으로 사용합니다.
+- onedir 결과물은 `dist\CSV Plot Maker\CSV Plot Maker.exe`이며, `dist\CSV Plot Maker` 폴더 전체를 그대로 옮기면 Python 설치 없이 다른 Windows PC에서도 실행됩니다.
+- 단일 실행 파일이 필요하면 맨 끝에 `-- --onefile`을 붙입니다 (`--` 뒤의 인자는 PyInstaller가 아니라 `.spec`이 읽습니다). 결과물은 `dist\CSV Plot Maker.exe` 하나이며, 실행할 때마다 임시 폴더에 압축을 풀기 때문에 onedir보다 시작이 느립니다.
+- `BUILD_DATE`(창 제목에 표시되는 빌드일자)는 위 `.spec` 빌드 시 오늘 날짜로 자동 기록되므로 수동으로 갱신할 필요가 없습니다 -- `CSV Plot Maker.spec` 맨 위에서 빌드할 때마다 `src/csv_plot_maker/_version.py`를 직접 고쳐씁니다.
+- 주의: `uv run pyinstaller ... src\csv_plot_maker\main.py`처럼 `.spec` 대신 스크립트를 지정해 빌드하면 PyInstaller가 `CSV Plot Maker.spec`을 새로 만들어 **덮어쓰므로** 위 빌드일자 자동 기록 코드와 onedir 설정이 사라집니다. 반드시 `.spec`으로 빌드하세요.
 - `__version__`(버전 번호)은 여전히 기능이 바뀔 때마다 `src/csv_plot_maker/_version.py`와 `pyproject.toml`을 함께 손으로 올려주세요 -- 버전업 시점은 사람이 판단할 부분이라 자동화하지 않았습니다.
 
 ## 프로젝트 구조
