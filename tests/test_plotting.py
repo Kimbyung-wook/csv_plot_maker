@@ -204,3 +204,26 @@ def test_repeated_rebuild_does_not_accumulate_x_range_broadcast_connections(qtbo
     widget.get_view(0, 0).plot_item.setXRange(5.0, 10.0, padding=0)
 
     assert len(calls) == 1
+
+
+def test_rebuild_and_series_removal_leave_deletion_to_qt_not_the_removing_call(qtbot):
+    """Removed subplots/curves used to be freed synchronously the moment Python
+    dropped them, from inside whatever call removed them -- the pattern seen in
+    crash dumps of closing one CSV and opening another. They must now outlive
+    the removing call and be deleted by Qt once the event loop runs."""
+    import shiboken6
+
+    widget = PlotGridWidget()
+    qtbot.addWidget(widget)
+    view = widget.get_view(0, 0)
+    series = Series(id="s1", source_id="src", y_column="y", x_column="x")
+    view.set_series_data(series, np.arange(5.0), np.arange(5.0))
+    curve = view._curves["s1"]
+
+    view.remove_series("s1")
+    assert shiboken6.isValid(curve)
+    old_plot_item, old_right_vb = view.plot_item, view.right_vb
+    widget.rebuild(1, 1)
+    assert shiboken6.isValid(old_plot_item) and shiboken6.isValid(old_right_vb)
+
+    qtbot.waitUntil(lambda: not any(shiboken6.isValid(o) for o in (curve, old_plot_item, old_right_vb)))

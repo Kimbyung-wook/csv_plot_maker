@@ -5,6 +5,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 
 from csv_plot_maker.models.series import Series
+from csv_plot_maker.plotting.deferred_delete import defer_delete
 from csv_plot_maker.plotting.style_map import make_pen, symbol_kwargs
 
 # The pt size at which pyqtgraph's own built-in legend icon size (20x20px,
@@ -234,12 +235,17 @@ class SubplotView:
         axis = self._curve_axis.pop(series_id, "primary")
         self._curve_legend_names.pop(series_id, None)
         if curve is not None:
-            if self.plot_item.legend is not None:
-                self.plot_item.legend.removeItem(curve)
+            legend_entry = ()
+            legend = self.plot_item.legend
+            if legend is not None:
+                legend_entry = next(((s, l) for s, l in legend.items if s.item is curve), ())
+                legend.removeItem(curve)
             if axis == "secondary":
                 self.right_vb.removeItem(curve)
             else:
                 self.plot_item.removeItem(curve)
+            # Let Qt delete them later instead of Python right now (see deferred_delete.py).
+            defer_delete(curve, *legend_entry)
             self._update_right_axis_visibility()
 
     def get_x_range(self) -> tuple[float, float]:
@@ -453,6 +459,7 @@ class SubplotView:
         scene = self.plot_item.scene()
         if scene is not None:
             scene.removeItem(self.right_vb)
+        defer_delete(self.right_vb)
 
     def has_secondary_series(self) -> bool:
         return any(axis == "secondary" for axis in self._curve_axis.values())

@@ -4,6 +4,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtGui import QPainter, QPicture
 
+from csv_plot_maker.plotting.deferred_delete import defer_delete
 from csv_plot_maker.plotting.subplot_view import SubplotView
 
 
@@ -53,10 +54,14 @@ class PlotGridWidget(pg.GraphicsLayoutWidget):
         self.rebuild(1, 1)
 
     def rebuild(self, rows: int, cols: int) -> None:
+        old_plot_items = [view.plot_item for view in self._views.values()]
         for view in self._views.values():
             view.teardown()
         self.clear()
         self._views = {}
+        # clear() only removes the old subplots from the layout/scene; let Qt
+        # delete them later instead of Python right now (see deferred_delete.py).
+        defer_delete(*old_plot_items)
         for r in range(rows):
             for c in range(cols):
                 plot_item = self.addPlot(row=r, col=c)
