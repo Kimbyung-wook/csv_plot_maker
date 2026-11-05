@@ -69,10 +69,17 @@ class MainWindow(QMainWindow):
         config_layout.addWidget(self.grid_panel)
         config_layout.addWidget(self.series_panel, 1)
         config_layout.addWidget(self.style_panel)
+        # Reserve the style section's width up front, even while it is hidden,
+        # so the first series selection doesn't widen the dock to fit it.
+        margins = config_layout.contentsMargins()
+        config_widget.setMinimumWidth(
+            self.style_panel.minimumSizeHint().width() + margins.left() + margins.right()
+        )
 
         config_dock = QDockWidget("Configure subplot", self)
         config_dock.setWidget(config_widget)
         self.addDockWidget(Qt.RightDockWidgetArea, config_dock)
+        self._config_dock = config_dock
 
         self._build_menu()
 
@@ -264,7 +271,7 @@ class MainWindow(QMainWindow):
         self.series_panel.refresh_series_list(items)
         # QListWidget selection is cleared on refresh; keep the style section in sync.
         self._selected_series_id = ""
-        self.style_panel.set_series(None)
+        self._set_style_series(None)
 
     def _refresh_active_subplot_controls(self) -> None:
         subplot = self._active_subplot()
@@ -775,12 +782,26 @@ class MainWindow(QMainWindow):
         if moved_from is not None:
             self.statusBar().showMessage(f"Moved '{column_name}' from {moved_from} to ({row}, {col})")
 
+    def _set_style_series(self, *args) -> None:
+        """StylePanel.set_series, keeping the right dock at the width it had.
+
+        The style section is shown only while a series is selected, and until
+        the user drags a dock's edge QMainWindow sizes it from its contents'
+        size hint -- so selecting/deselecting a series made the whole right
+        dock jump wider/narrower. Re-applying the previous width pins it
+        (resizeDocks clamps to the new minimum width if that is larger).
+        """
+        width = self._config_dock.width()
+        self.style_panel.set_series(*args)
+        if self._config_dock.isVisible() and not self._config_dock.isFloating():
+            self.resizeDocks([self._config_dock], [width], Qt.Horizontal)
+
     def _on_series_selection_changed(self, series_id: str) -> None:
         self._selected_series_id = series_id
         subplot = self._active_subplot()
         series = subplot.get_series(series_id) if series_id else None
         x_options = self._source_column_options(series.source_id) if series else []
-        self.style_panel.set_series(series, len(subplot.series), x_options)
+        self._set_style_series(series, len(subplot.series), x_options)
 
     def _on_series_delete_requested(self, series_id: str) -> None:
         self._remove_series(series_id)

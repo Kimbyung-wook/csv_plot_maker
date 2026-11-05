@@ -110,6 +110,15 @@ class StylePanel(QWidget):
         # (see Series.x_column), so a subplot mixing series from more than
         # one file still plots each one against data of the same length.
         self.x_combo = QComboBox()
+        # By default a QComboBox's size hint is as wide as its longest item,
+        # so a CSV with long column names made this one combo (and with it
+        # the whole right dock) jump to several hundred pixels wider whenever
+        # a series was selected. Size it by a fixed character count instead;
+        # the full name stays readable in the (separately widened) popup list
+        # and in the tooltip.
+        self.x_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.x_combo.setMinimumContentsLength(12)
+        self.x_combo.currentTextChanged.connect(self.x_combo.setToolTip)
         self.x_offset_spin = DefaultingDoubleSpinBox(default=0.0)
         self.x_offset_spin.setRange(-1e12, 1e12)
         self.x_offset_spin.setDecimals(3)
@@ -157,6 +166,10 @@ class StylePanel(QWidget):
     def _set_x_options(self, column_names: list[str]) -> None:
         self.x_combo.clear()
         self.x_combo.addItems(column_names)
+        # Let the drop-down list itself be as wide as the longest name, even
+        # though the closed combo no longer is (see __init__).
+        view = self.x_combo.view()
+        view.setMinimumWidth(view.sizeHintForColumn(0) + view.verticalScrollBar().sizeHint().width() + 8)
 
     def set_x_offset(self, value: float) -> None:
         self.x_offset_spin.blockSignals(True)

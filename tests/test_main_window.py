@@ -989,3 +989,28 @@ def test_load_layout_without_csv_warns_and_opens_no_dialog(qtbot):
         win._on_load_config_as()
     assert warning.call_count == 2
     open_dialog.assert_not_called()
+
+
+def test_selecting_and_deselecting_a_series_keeps_the_right_dock_width(qtbot):
+    win = MainWindow()
+    qtbot.addWidget(win)
+    win.resize(1300, 850)
+    win.show()
+    qtbot.waitExposed(win)
+    store = _store_with(sparse_col=np.array([1.0, 2.0]), dense_col=np.array([1.0, 2.0]))
+    # A very long column name used to make the X-column combo (and with it
+    # the whole dock) several hundred pixels wider whenever a series was picked.
+    long_name = "a_very_long_column_name_" * 8
+    store.columns[long_name] = np.array([1.0, 2.0])
+    store.numeric[long_name] = True
+    source = _install_store(win, store)
+    subplot = win._active_subplot()
+    win._on_column_dropped(subplot.row, subplot.col, source.id, long_name)
+    win._on_series_selection_changed("")
+    qtbot.wait(50)
+    width = win._config_dock.width()
+
+    for series_id in (subplot.series[0].id, "", subplot.series[0].id, ""):
+        win._on_series_selection_changed(series_id)
+        qtbot.wait(50)
+        assert win._config_dock.width() == width

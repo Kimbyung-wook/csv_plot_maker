@@ -2,13 +2,13 @@
 
 CSV 데이터를 불러와 여러 개의 subplot으로 구성된 그래프를 그리는 데스크톱 분석 도구입니다. 여러 CSV 파일을 동시에 열어 파일별로 색이 구분된 데이터를 한 subplot에도 자유롭게 섞어 비교할 수 있고, 컬럼을 여러 subplot에 중복 선택해 시리즈로 추가하고, 시리즈별 색상/선모양/마커/굵기를 즉시 바꾸고, subplot마다 이중 Y축과 축 라벨을 설정할 수 있습니다. 수십만~수백만 행 규모의 CSV도 빠르게 로딩·렌더링하도록 만들어졌습니다.
 
-**현재 버전: v1.9.3** (2026-10-25) — 버전별 변경 이력은 프로그램의 Info → Version History 메뉴 참고.
+**현재 버전: v1.9.4** (2026-11-05) — 버전별 변경 이력은 프로그램의 Info → Version History 메뉴 참고.
 
 **프로그램 사용 방법(화면 구성, CSV 불러오기, 데이터 추가, 축/스타일 설정, 레이아웃 저장 등)은 [howtouse.md](howtouse.md)를 참고하세요.** 전체 요구사항과 설계 배경은 [DESIGN.md](DESIGN.md)를 참고하세요.
 
 ## 요구 사항
 
-- Python 3.10 이상
+- Python 3.12.10 (개발/검증 기준 버전, 프로젝트 루트 `.python-version`에 고정 -- `uv`는 이 버전을 자동으로 사용). 코드 자체는 Python 3.10 이상에서 동작하도록 작성되어 있습니다.
 - Windows에서 개발/검증됨. PySide6·pyqtgraph·polars 모두 Linux용 wheel을 제공하므로 소스로 실행하는 것은 Linux에서도 가능할 것으로 예상되지만, 아직 별도로 빌드/검증하지는 않았습니다. Linux용 standalone 실행 파일은 Linux 환경(WSL/Docker/실제 Linux 머신)에서 PyInstaller를 직접 실행해야 만들 수 있습니다 — PyInstaller는 크로스컴파일을 지원하지 않습니다.
 
 ## 설치 및 실행
@@ -23,9 +23,25 @@ uv run csv-plot-maker
 ### pip 사용
 
 ```powershell
-pip install -r requirements.txt
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt       # 실행만 할 때
+pip install -r requirements-dev.txt   # 빌드(PyInstaller)·테스트(pytest)까지 할 때 (requirements.txt 포함)
 python -m csv_plot_maker.main
 ```
+
+pip 환경에서는 아래 테스트/빌드 명령의 `uv run`을 빼고 실행하면 됩니다 (예: `pytest -q`, `pyinstaller "CSV Plot Maker.spec" --noconfirm --clean`).
+
+`requirements.txt`/`requirements-dev.txt`는 `uv.lock`과 같은 버전을 Python 3.12.10 / Windows 기준으로 고정한 것입니다. 의존성을 바꾼 뒤에는 다시 만들어 주세요:
+
+```powershell
+uv export --frozen --no-dev --no-hashes --no-emit-project -o lock_run.txt
+uv export --frozen --all-groups --no-hashes --no-emit-project -o lock_all.txt
+uv pip compile lock_run.txt --python-version 3.12.10 --python-platform windows --no-header --no-annotate
+uv pip compile lock_all.txt --python-version 3.12.10 --python-platform windows --no-header --no-annotate
+```
+
+(앞의 결과는 `requirements.txt`의 `-e .` 아래에, 뒤의 결과 중 앞에 없는 항목은 `requirements-dev.txt`의 `-r requirements.txt` 아래에 넣습니다.)
 
 ## 개발자용
 

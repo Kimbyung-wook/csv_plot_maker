@@ -1,0 +1,17 @@
+# Build (PyInstaller) + test (pytest) dependencies -- Python 3.12.10, Windows.
+# Includes requirements.txt. Install:  pip install -r requirements-dev.txt
+# Regenerate after changing dependencies: see README.md.
+-r requirements.txt
+altgraph==0.17.5
+iniconfig==2.3.0
+packaging==26.3
+pefile==2024.8.26
+pluggy==1.6.0
+pygments==2.21.0
+pyinstaller==6.22.2
+pyinstaller-hooks-contrib==2026.6
+pytest==9.1.1
+pytest-qt==4.5.0
+pywin32-ctypes==0.2.3
+setuptools==84.0.0
+typing-extensions==4.16.0
