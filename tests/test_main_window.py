@@ -385,7 +385,7 @@ def test_loading_a_layout_restores_its_saved_legend_font_size(qtbot, tmp_path):
     # pass by coincidence (e.g. both happening to already be the default).
     win._on_legend_font_size_changed(11)
 
-    win._load_layout_from_path(str(path))
+    win._load_layout_from_path(str(path), mode="replace")
 
     assert win.project.legend_font_size == 7
     assert win.plot_grid._legend_font_pt == 7
@@ -561,7 +561,7 @@ def test_saved_y_range_round_trips_through_load_layout(qtbot, tmp_path):
     path = tmp_path / "layout.json"
     save_project(win.project, str(path))
 
-    win._load_layout_from_path(str(path))
+    win._load_layout_from_path(str(path), mode="replace")
 
     loaded_subplot = win._active_subplot()
     assert loaded_subplot.y_range_left == [-7.0, 7.0]
@@ -877,7 +877,7 @@ def test_old_style_global_link_x_axes_migrates_to_every_subplot_linked(qtbot, tm
         sp.pop("link_x_axis", None)
     path.write_text(json.dumps(data), encoding="utf-8")
 
-    win._load_layout_from_path(str(path))
+    win._load_layout_from_path(str(path), mode="replace")
 
     assert all(sp.link_x_axis for sp in win.project.subplots)
 
@@ -914,7 +914,7 @@ def test_loading_a_layout_applies_to_a_different_currently_open_csv_without_reop
     win2.plot_grid.rebuild(1, 1)
 
     with patch.object(win2.csv_panel, "load_path") as mock_load_path:
-        win2._load_layout_from_path(str(path))
+        win2._load_layout_from_path(str(path), mode="replace")
 
     mock_load_path.assert_not_called()
     assert set(win2.data_sources) == {"new-id"}

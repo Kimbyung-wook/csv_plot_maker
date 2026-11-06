@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -20,19 +22,31 @@ from csv_plot_maker._version import BUILD_DATE, __version__
 from csv_plot_maker.models.data_source import DataSource, SourceRef
 from csv_plot_maker.models.project import ProjectState
 from csv_plot_maker.models.series import Series
-from csv_plot_maker.models.serialization import config_path_for_csv, load_project, save_project
+from csv_plot_maker.models.serialization import (
+    LayoutFile,
+    config_path_for_csv,
+    default_tab_name,
+    duplicate_tab_name,
+    load_layout_file,
+    save_project,
+    save_workspace,
+)
 from csv_plot_maker.models.subplot import SubplotConfig
+from csv_plot_maker.plotting.deferred_delete import defer_delete
 from csv_plot_maker.plotting.plot_grid_widget import PlotGridWidget
 from csv_plot_maker.plotting.style_map import next_default_color
 from csv_plot_maker.ui import theme
 from csv_plot_maker.ui.csv_panel import CsvPanel
 from csv_plot_maker.ui.grid_config_panel import GridConfigPanel
+from csv_plot_maker.ui.layout_tab_widget import LayoutTabWidget
 from csv_plot_maker.ui.license_dialog import LicenseDialog
 from csv_plot_maker.ui.series_panel import SeriesPanel
 from csv_plot_maker.ui.style_panel import StylePanel
 from csv_plot_maker.ui.version_history_dialog import VersionHistoryDialog
 
 _AXIS_LABEL_FIELDS = {"bottom": "x_label", "left": "y_label_left", "right": "y_label_right"}
+# Characters Windows doesn't allow in a file name (Save Tab As's default name).
+_FILENAME_UNSAFE = re.compile(r'[<>:"/\\|?*]')
 
 
 class MainWindow(QMainWindow):
@@ -45,12 +59,23 @@ class MainWindow(QMainWindow):
         # the same column name existing in two different files never
         # collides (see DataSource).
         self.data_sources: dict[str, DataSource] = {}
-        self.project = ProjectState(grid_rows=1, grid_cols=1)
-        self.project.build_default_grid()
         self._selected_series_id: str = ""
+        # The first CSV opened this session: Save Layout / Load Layout use
+        # the .json beside it, and no layout can be loaded without it.
+        self._layout_csv_path: str | None = None
+        # App-wide, not per tab: every tab's legends use the same text size.
+        self._legend_font_size = 9
+        self._theme_colors: tuple | None = None
 
-        self.plot_grid = PlotGridWidget()
-        self.setCentralWidget(self.plot_grid)
+        # Central area: one tab per layout. Each tab is a PlotGridWidget with
+        # its own ProjectState (self._projects); self.plot_grid / self.project
+        # are whichever tab is showing, or the one _tab_context() points at.
+        # The open CSVs (self.data_sources) are shared by every tab.
+        self._projects: dict[PlotGridWidget, ProjectState] = {}
+        self._context_grid: PlotGridWidget | None = None
+        self.layout_tabs = LayoutTabWidget()
+        self.setCentralWidget(self.layout_tabs)
+        self._add_tab(self._new_project())
 
         # Left dock: open one or more CSVs, see their columns, drag one onto a subplot.
         self.csv_panel = CsvPanel()
@@ -103,26 +128,206 @@ class MainWindow(QMainWindow):
         self.style_panel.zero_at_start_requested.connect(self._on_series_zero_at_start_requested)
         self.style_panel.apply_x_to_matching_requested.connect(self._on_apply_x_to_matching_series_requested)
         self.style_panel.remove_requested.connect(self._on_style_remove_requested)
-        self.plot_grid.subplot_clicked.connect(self._on_canvas_subplot_clicked)
-        self.plot_grid.column_dropped.connect(self._on_column_dropped)
-        self.plot_grid.axis_label_double_clicked.connect(self._on_axis_label_double_clicked)
+        self.layout_tabs.currentChanged.connect(self._on_current_tab_changed)
+        self.layout_tabs.add_requested.connect(self._on_add_tab_requested)
+        self.layout_tabs.duplicate_requested.connect(self._on_duplicate_tab_requested)
+        self.layout_tabs.close_requested.connect(self._on_close_tab_requested)
+        self.layout_tabs.rename_requested.connect(self._on_rename_tab_requested)
 
         self._refresh_subplot_selector()
         self._apply_theme("system")
         self.statusBar().showMessage("Ready")
 
+    # -- layout tabs ---------------------------------------------------------
+
+    @property
+    def plot_grid(self) -> PlotGridWidget:
+        if self._context_grid is not None:
+            return self._context_grid
+        return self.layout_tabs.currentWidget()
+
+    @property
+    def project(self) -> ProjectState:
+        return self._projects[self.plot_grid]
+
+    @project.setter
+    def project(self, project: ProjectState) -> None:
+        self._projects[self.plot_grid] = project
+
+    def _grids(self) -> list[PlotGridWidget]:
+        """Every tab's grid, in tab order."""
+        return self.layout_tabs.pages()
+
+    def _is_showing_context_tab(self) -> bool:
+        return self.plot_grid is self.layout_tabs.currentWidget()
+
+    @contextmanager
+    def _tab_context(self, grid: PlotGridWidget):
+        """Point self.plot_grid / self.project at `grid`'s tab (shown or not)
+        for the duration, so the per-tab helpers can work on any tab. The
+        side panels only ever show the current tab, so code inside must not
+        refresh them unless _is_showing_context_tab()."""
+        previous = self._context_grid
+        self._context_grid = grid
+        try:
+            yield
+        finally:
+            self._context_grid = previous
+
+    def _new_project(self, name: str | None = None) -> ProjectState:
+        project = ProjectState(grid_rows=1, grid_cols=1, legend_font_size=self._legend_font_size)
+        project.build_default_grid()
+        project.name = name if name is not None else default_tab_name(self.layout_tabs.tab_names())
+        return project
+
+    def _unique_tab_name(self, name: str, ignore: PlotGridWidget | None = None) -> str:
+        others = [self._projects[g].name for g in self._grids() if g is not ignore and g in self._projects]
+        return name if name not in others else duplicate_tab_name(name, others)
+
+    def _new_grid(self) -> PlotGridWidget:
+        grid = PlotGridWidget()
+        if self._theme_colors is not None:
+            grid.set_theme_colors(*self._theme_colors)
+        grid.set_legend_font_size(self._legend_font_size)
+        grid.subplot_clicked.connect(self._on_canvas_subplot_clicked)
+        grid.column_dropped.connect(self._on_column_dropped)
+        grid.axis_label_double_clicked.connect(self._on_axis_label_double_clicked)
+        return grid
+
+    def _add_tab(self, project: ProjectState, index: int = -1) -> PlotGridWidget:
+        """Add a tab holding `project` (grid built, nothing plotted yet --
+        see _show_project_in_tab) and switch to it."""
+        project.legend_font_size = self._legend_font_size
+        grid = self._new_grid()
+        # Registered before insertTab: inserting can emit currentChanged.
+        self._projects[grid] = project
+        grid.rebuild(project.grid_rows, project.grid_cols)
+        index = self.layout_tabs.insertTab(index, grid, project.name)
+        self.layout_tabs.setCurrentIndex(index)
+        return grid
+
+    def _remove_tab(self, grid: PlotGridWidget) -> None:
+        index = self.layout_tabs.indexOf(grid)
+        if index < 0:
+            return
+        self.layout_tabs.removeTab(index)
+        self._projects.pop(grid, None)
+        # Let Qt delete the grid (and its subplots) later, not Python right
+        # now -- see deferred_delete.py.
+        defer_delete(grid)
+
+    def _reset_tabs(self) -> None:
+        """Back to the start-up state: one empty 1x1 layout tab."""
+        old_grids = self._grids()
+        self._add_tab(self._new_project(default_tab_name([])))
+        for grid in old_grids:
+            self._remove_tab(grid)
+
+    def _rename_tab(self, grid: PlotGridWidget, name: str) -> None:
+        self._projects[grid].name = name
+        self.layout_tabs.setTabText(self.layout_tabs.indexOf(grid), name)
+
+    def _show_project_in_tab(self, grid: PlotGridWidget, project: ProjectState, restore_saved_ranges: bool) -> int:
+        """Make `project` (freshly loaded or copied) the contents of `grid`'s
+        tab: map it onto the open files, rebuild and plot it. Doesn't touch
+        the side panels. Returns how many series were dropped as no longer
+        valid."""
+        project.legend_font_size = self._legend_font_size
+        self._projects[grid] = project
+        self._rename_tab(grid, project.name)
+        with self._tab_context(grid):
+            # A layout is a reusable template -- its subplot grid and per-file
+            # series get remapped by position onto whichever files are
+            # currently open (see ProjectState.reconcile_data_sources), which
+            # is exactly what lets the same layout be applied to a different
+            # CSV than it was originally saved against.
+            dropped = self._reconcile_project_data_sources() + self._prune_invalid_references()
+            self.plot_grid.rebuild(project.grid_rows, project.grid_cols)
+            self._plot_tab(restore_saved_ranges)
+        return dropped
+
+    def _plot_tab(self, restore_saved_ranges: bool) -> None:
+        """Replot every subplot of the (context) tab, auto-range, and
+        optionally restore its saved Y ranges.
+
+        If the tab has a linked subplot group, _sync_linked_views() applies
+        that membership and broadcasts the reference subplot's still-empty
+        default (0, 1) X range to the rest of the group -- which disables
+        their autoRange before _replot_all_subplots() has added any real data
+        to fit. Auto-ranging now that the data actually exists (same as
+        clicking each subplot's "A" button) re-syncs the link using the
+        now-correctly-fitted reference range.
+        """
+        self.plot_grid.set_legend_font_size(self._legend_font_size)
+        self._sync_linked_views()
+        self._replot_all_subplots()
+        self._autorange_all_views()
+        if restore_saved_ranges:
+            self._restore_saved_y_ranges()
+
+    def _on_current_tab_changed(self, _index: int) -> None:
+        if self.layout_tabs.currentWidget() not in self._projects:
+            return  # mid-add/remove
+        if not hasattr(self, "series_panel"):
+            return  # still in __init__
+        self._refresh_selector_and_controls()
+        self.plot_grid.schedule_axis_width_sync()
+
+    def _on_add_tab_requested(self) -> None:
+        self._add_tab(self._new_project())
+
+    def _on_duplicate_tab_requested(self, index: int) -> None:
+        grid = self.layout_tabs.widget(index)
+        if grid not in self._projects:
+            return
+        with self._tab_context(grid):
+            # Copy the Y ranges as they are on screen, not as last saved.
+            self._capture_current_y_ranges()
+        source = self._projects[grid]
+        clone = source.clone_with_new_ids()
+        clone.name = duplicate_tab_name(source.name, self.layout_tabs.tab_names())
+        new_grid = self._add_tab(clone, index + 1)
+        self._show_project_in_tab(new_grid, clone, restore_saved_ranges=True)
+        self._refresh_selector_and_controls()
+
+    def _on_close_tab_requested(self, index: int) -> None:
+        grid = self.layout_tabs.widget(index)
+        if grid not in self._projects or self.layout_tabs.count() <= 1:
+            return
+        project = self._projects[grid]
+        if project.has_series():
+            answer = QMessageBox.question(
+                self, "Close tab", f"Close the tab '{project.name}'? Its graphs will be removed."
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._remove_tab(grid)
+
+    def _on_rename_tab_requested(self, index: int, name: str) -> None:
+        grid = self.layout_tabs.widget(index)
+        if grid in self._projects:
+            self._rename_tab(grid, name)
+
     # -- menu ----------------------------------------------------------------
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
-        save_action = file_menu.addAction("Save Layout")
-        save_action.triggered.connect(self._on_save_config)
-        save_as_action = file_menu.addAction("Save Layout As...")
-        save_as_action.triggered.connect(self._on_save_config_as)
-        load_action = file_menu.addAction("Load Layout")
-        load_action.triggered.connect(self._on_load_config)
-        load_as_action = file_menu.addAction("Load Layout As...")
-        load_as_action.triggered.connect(self._on_load_config_as)
+        # "Layout" = every tab at once; "Tab" = just the current tab.
+        for entry in (
+            ("Save Layout", self._on_save_config),
+            ("Save Layout As...", self._on_save_config_as),
+            ("Load Layout", self._on_load_config),
+            ("Load Layout As...", self._on_load_config_as),
+            None,
+            ("Save Tab As...", self._on_save_tab_as),
+            ("Load Tab As...", self._on_load_tab_as),
+            ("Load Tab As New...", self._on_load_tab_as_new),
+        ):
+            if entry is None:
+                file_menu.addSeparator()
+                continue
+            text, slot = entry
+            file_menu.addAction(text).triggered.connect(slot)
 
         settings_menu = self.menuBar().addMenu("Settings")
         theme_menu = settings_menu.addMenu("Theme")
@@ -142,7 +347,7 @@ class MainWindow(QMainWindow):
         for label, size_pt in (("Tiny", 5), ("Small", 7), ("Medium", 9), ("Large", 11)):
             action = legend_font_menu.addAction(label)
             action.setCheckable(True)
-            action.setChecked(size_pt == self.project.legend_font_size)
+            action.setChecked(size_pt == self._legend_font_size)
             action.triggered.connect(lambda _checked=False, p=size_pt: self._on_legend_font_size_changed(p))
             legend_font_group.addAction(action)
             self._legend_font_actions[size_pt] = action
@@ -160,12 +365,18 @@ class MainWindow(QMainWindow):
         VersionHistoryDialog(self).exec()
 
     def _on_legend_font_size_changed(self, size_pt: int) -> None:
-        self.project.legend_font_size = size_pt
-        self.plot_grid.set_legend_font_size(size_pt)
+        self._set_legend_font_size(size_pt)
+
+    def _set_legend_font_size(self, size_pt: int) -> None:
+        """The legend text size is app-wide: applied to every tab."""
+        self._legend_font_size = size_pt
+        for grid in self._grids():
+            self._projects[grid].legend_font_size = size_pt
+            grid.set_legend_font_size(size_pt)
         self._sync_legend_font_menu()
 
     def _sync_legend_font_menu(self) -> None:
-        action = self._legend_font_actions.get(self.project.legend_font_size)
+        action = self._legend_font_actions.get(self._legend_font_size)
         if action is not None:
             action.setChecked(True)
 
@@ -243,7 +454,7 @@ class MainWindow(QMainWindow):
         if self.project.active_subplot_id:
             self.grid_panel.set_active(self.project.active_subplot_id)
         self.grid_panel.sync_grid_spins(self.project.grid_rows, self.project.grid_cols)
-        self.plot_grid.set_legend_font_size(self.project.legend_font_size)
+        self.plot_grid.set_legend_font_size(self._legend_font_size)
         self._sync_legend_font_menu()
         self._sync_linked_views()
 
@@ -359,7 +570,7 @@ class MainWindow(QMainWindow):
         if not subplot.series:
             view.set_legend_visible(False)
         self.plot_grid.schedule_axis_width_sync()
-        if subplot.id == self.project.active_subplot_id:
+        if subplot.id == self.project.active_subplot_id and self._is_showing_context_tab():
             self._refresh_series_list()
 
     def _remove_series(self, series_id: str) -> None:
@@ -379,7 +590,9 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, mode: str) -> None:
         app = QApplication.instance()
         background, foreground = theme.apply_app_theme(app, mode)
-        self.plot_grid.set_theme_colors(background, foreground)
+        self._theme_colors = (background, foreground)
+        for grid in self._grids():
+            grid.set_theme_colors(background, foreground)
 
     # -- signal handlers -----------------------------------------------------
 
@@ -388,30 +601,34 @@ class MainWindow(QMainWindow):
         self.data_sources[source.id] = source
 
         loaded_saved_layout = False
-        reconciled_dropped = 0
+        dropped = 0
         config_path = None
         if is_first_source:
-            # Always start from a clean single-subplot grid for the very
-            # first file opened in this session -- subsequent files add
-            # alongside whatever's already plotted instead of resetting it.
-            self.project = ProjectState(grid_rows=1, grid_cols=1)
-            self.project.build_default_grid()
-
+            # The very first file opened in this session starts from its own
+            # saved layout (every tab in it), or else from one clean
+            # single-subplot tab -- subsequent files add alongside whatever's
+            # already plotted instead of resetting it.
+            self._layout_csv_path = source.path
             config_path = config_path_for_csv(source.path)
+            layout = None
             if config_path.exists():
                 try:
-                    self.project = load_project(str(config_path))
-                    loaded_saved_layout = True
+                    layout = load_layout_file(str(config_path))
                 except Exception as exc:
                     self.statusBar().showMessage(f"Failed to load saved layout {config_path.name}: {exc}")
-
-            self.project.csv_path = source.path
-            self.plot_grid.rebuild(self.project.grid_rows, self.project.grid_cols)
-            if loaded_saved_layout:
-                reconciled_dropped = self._reconcile_project_data_sources()
-
-        dropped = self._prune_invalid_references() + reconciled_dropped
-        self._finish_loading_project(restore_saved_ranges=is_first_source and loaded_saved_layout)
+            if layout is not None:
+                dropped = self._replace_all_tabs(layout)
+                loaded_saved_layout = True
+            else:
+                self._reset_tabs()
+                with self._tab_context(self.plot_grid):
+                    self._plot_tab(restore_saved_ranges=False)
+        else:
+            for grid in self._grids():
+                with self._tab_context(grid):
+                    dropped += self._prune_invalid_references()
+                    self._plot_tab(restore_saved_ranges=False)
+        self._refresh_selector_and_controls()
 
         store = source.store
         data_mb = store.total_nbytes() / (1024 * 1024)
@@ -425,31 +642,13 @@ class MainWindow(QMainWindow):
             message += f" ({dropped} series dropped: no longer valid)"
         self.statusBar().showMessage(message)
 
-    def _finish_loading_project(self, restore_saved_ranges: bool) -> None:
-        """Common tail after `self.project` has just been set to its "final"
-        state (a fresh grid, a freshly loaded layout, ...) and the plot grid
-        rebuilt: refresh every side-panel control, replot every subplot,
-        then auto-range and (optionally) restore any saved Y ranges.
-
-        If the project has a linked subplot group, _refresh_selector_and_controls()
-        below applies that membership and broadcasts the reference subplot's
-        still-empty default (0, 1) X range to the rest of the group -- which
-        disables their autoRange before _replot_all_subplots() has added any
-        real data to fit. Auto-ranging now that the data actually exists
-        (same as clicking each subplot's "A" button) re-syncs the link using
-        the now-correctly-fitted reference range.
-        """
-        self._refresh_selector_and_controls()
-        self._replot_all_subplots()
-        self._autorange_all_views()
-        if restore_saved_ranges:
-            self._restore_saved_y_ranges()
-
     def _on_csv_closed(self, source_id: str) -> None:
         self.data_sources.pop(source_id, None)
-        for subplot in list(self.project.subplots):
-            for series in [s for s in subplot.series if s.source_id == source_id]:
-                self._remove_series_from(subplot, series.id)
+        for grid in self._grids():
+            with self._tab_context(grid):
+                for subplot in list(self.project.subplots):
+                    for series in [s for s in subplot.series if s.source_id == source_id]:
+                        self._remove_series_from(subplot, series.id)
         self._refresh_active_subplot_controls()
         self.statusBar().showMessage("Closed a data file")
 
@@ -461,9 +660,8 @@ class MainWindow(QMainWindow):
         _on_csv_loaded's is_first_source branch).
         """
         self.data_sources = {}
-        self.project = ProjectState(grid_rows=1, grid_cols=1)
-        self.project.build_default_grid()
-        self.plot_grid.rebuild(self.project.grid_rows, self.project.grid_cols)
+        self._layout_csv_path = None
+        self._reset_tabs()
         self._refresh_selector_and_controls()
         self.statusBar().showMessage("Closed all files")
 
@@ -475,9 +673,11 @@ class MainWindow(QMainWindow):
         legend text that mixes this source with another, and the active
         subplot's series list.
         """
-        for subplot in self.project.subplots:
-            if any(s.source_id == source_id for s in subplot.series):
-                self._replot_subplot(subplot)
+        for grid in self._grids():
+            with self._tab_context(grid):
+                for subplot in self.project.subplots:
+                    if any(s.source_id == source_id for s in subplot.series):
+                        self._replot_subplot(subplot)
         self._refresh_active_subplot_controls()
 
     def _autorange_all_views(self) -> None:
@@ -861,28 +1061,62 @@ class MainWindow(QMainWindow):
         if self._selected_series_id:
             self._remove_series(self._selected_series_id)
 
+    # -- layout files ----------------------------------------------------------
+    # "Layout" = every tab (the multi-tab file format); "Tab" = the current tab
+    # only (the single-tab format every layout file had before tabs existed).
+
+    def _capture_tab_for_saving(self, grid: PlotGridWidget) -> ProjectState:
+        with self._tab_context(grid):
+            self._capture_current_y_ranges()
+            self._capture_data_source_refs()
+            return self.project
+
+    def _collect_layout(self) -> LayoutFile:
+        return LayoutFile(
+            tabs=[self._capture_tab_for_saving(grid) for grid in self._grids()],
+            active_tab=self.layout_tabs.currentIndex(),
+            legend_font_size=self._legend_font_size,
+            multi_tab=True,
+        )
+
     def _on_save_config(self) -> None:
-        if not self.project.csv_path:
+        if not self._layout_csv_path:
             self.statusBar().showMessage("Load a CSV first")
             return
-        self._capture_current_y_ranges()
-        self._capture_data_source_refs()
-        config_path = config_path_for_csv(self.project.csv_path)
-        save_project(self.project, str(config_path))
-        self.statusBar().showMessage(f"Saved layout to {config_path.name}")
+        config_path = config_path_for_csv(self._layout_csv_path)
+        save_workspace(self._collect_layout(), str(config_path))
+        self.statusBar().showMessage(f"Saved layout ({self.layout_tabs.count()} tabs) to {config_path.name}")
 
     def _on_save_config_as(self) -> None:
-        if not self.project.csv_path:
+        if not self._layout_csv_path:
             self.statusBar().showMessage("Load a CSV first")
             return
-        default_path = str(config_path_for_csv(self.project.csv_path))
+        default_path = str(config_path_for_csv(self._layout_csv_path))
         path, _ = QFileDialog.getSaveFileName(self, "Save Layout As", default_path, "JSON Files (*.json)")
         if not path:
             return
-        self._capture_current_y_ranges()
-        self._capture_data_source_refs()
-        save_project(self.project, path)
-        self.statusBar().showMessage(f"Saved layout to {Path(path).name}")
+        save_workspace(self._collect_layout(), path)
+        self.statusBar().showMessage(f"Saved layout ({self.layout_tabs.count()} tabs) to {Path(path).name}")
+
+    def _default_tab_file_path(self) -> str:
+        """Beside the CSV, named after the current tab."""
+        name = _FILENAME_UNSAFE.sub("_", self.project.name).strip(" .") or "layout"
+        return str(Path(self._layout_csv_path).parent / f"{name}.json")
+
+    def _on_save_tab_as(self) -> None:
+        if not self._layout_csv_path:
+            self.statusBar().showMessage("Load a CSV first")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Tab As", self._default_tab_file_path(), "JSON Files (*.json)"
+        )
+        if not path:
+            return
+        self._save_tab_to_path(path)
+
+    def _save_tab_to_path(self, path: str) -> None:
+        save_project(self._capture_tab_for_saving(self.plot_grid), path)
+        self.statusBar().showMessage(f"Saved tab '{self.project.name}' to {Path(path).name}")
 
     def _warn_load_csv_first(self) -> None:
         # A layout is applied onto the currently open CSV(s) and never opens
@@ -890,17 +1124,17 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Load Layout", "Load a CSV file first, then load the layout.")
 
     def _on_load_config(self) -> None:
-        if not self.project.csv_path:
+        if not self._layout_csv_path:
             self._warn_load_csv_first()
             return
-        config_path = config_path_for_csv(self.project.csv_path)
+        config_path = config_path_for_csv(self._layout_csv_path)
         if not config_path.exists():
             self.statusBar().showMessage(f"No saved layout found at {config_path.name}")
             return
         self._load_layout_from_path(str(config_path))
 
     def _on_load_config_as(self) -> None:
-        if not self.project.csv_path:
+        if not self._layout_csv_path:
             self._warn_load_csv_first()
             return
         path, _ = QFileDialog.getOpenFileName(self, "Load Layout As", "", "JSON Files (*.json)")
@@ -908,28 +1142,135 @@ class MainWindow(QMainWindow):
             return
         self._load_layout_from_path(path)
 
-    def _load_layout_from_path(self, path: str) -> None:
+    def _read_layout_file(self, path: str) -> LayoutFile | None:
         try:
-            project = load_project(path)
+            return load_layout_file(path)
         except Exception as exc:
             self.statusBar().showMessage(f"Failed to load layout: {exc}")
+            return None
+
+    def _ask_replace_or_append(self, layout: LayoutFile, file_name: str) -> str:
+        """"replace", "append" or "" (cancelled)."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Load Layout")
+        count = len(layout.tabs)
+        box.setText(
+            f"{file_name} has {count} tab{'s' if count != 1 else ''}.\n"
+            "Replace the open tabs with them, or add them after the open tabs?"
+        )
+        replace_button = box.addButton("Replace", QMessageBox.ButtonRole.AcceptRole)
+        append_button = box.addButton("Append", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(replace_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is replace_button:
+            return "replace"
+        if clicked is append_button:
+            return "append"
+        return ""
+
+    def _load_layout_from_path(self, path: str, mode: str = "ask") -> None:
+        """Load every tab in a layout file. `mode`: "replace" the open tabs,
+        "append" after them, or "ask" the user which."""
+        layout = self._read_layout_file(path)
+        if layout is None:
             return
+        if mode == "ask":
+            mode = self._ask_replace_or_append(layout, Path(path).name)
+        if mode == "replace":
+            dropped = self._replace_all_tabs(layout)
+        elif mode == "append":
+            dropped = self._append_tabs(layout)
+        else:
+            return
+        self._refresh_selector_and_controls()
 
-        # A layout is a reusable template -- its subplot grid and per-file
-        # series get remapped by position onto whichever files are
-        # currently open (see ProjectState.reconcile_data_sources), which is
-        # exactly what lets the same layout be applied to a different CSV
-        # than it was originally saved against. Keep pointing at whatever
-        # CSV Save Layout would currently target, same as before this
-        # project object gets replaced.
-        project.csv_path = self.project.csv_path
-        self.project = project
-        dropped = self._reconcile_project_data_sources() + self._prune_invalid_references()
+        count = len(layout.tabs)
+        message = f"Loaded layout ({count} tab{'s' if count != 1 else ''}) from {Path(path).name}"
+        if dropped:
+            message += f" ({dropped} series dropped: no longer valid)"
+        self.statusBar().showMessage(message)
 
-        self.plot_grid.rebuild(self.project.grid_rows, self.project.grid_cols)
-        self._finish_loading_project(restore_saved_ranges=True)
+    def _replace_all_tabs(self, layout: LayoutFile) -> int:
+        """Swap every open tab for the layout's tabs, its legend text size
+        included. Returns how many series were dropped as no longer valid."""
+        old_grids = self._grids()
+        self._legend_font_size = layout.legend_font_size
+        new_grids = [self._add_tab(project) for project in layout.tabs]
+        for grid in old_grids:
+            self._remove_tab(grid)
+        dropped = sum(
+            self._show_project_in_tab(grid, project, restore_saved_ranges=True)
+            for grid, project in zip(new_grids, layout.tabs)
+        )
+        self.layout_tabs.setCurrentIndex(layout.active_tab)
+        self._sync_legend_font_menu()
+        return dropped
 
-        message = f"Loaded layout from {Path(path).name}"
+    def _append_tabs(self, layout: LayoutFile) -> int:
+        """Add the layout's tabs after the open ones (the app-wide legend
+        text size stays as it is)."""
+        dropped = 0
+        first_new = self.layout_tabs.count()
+        for project in layout.tabs:
+            project.name = self._unique_tab_name(project.name)
+            grid = self._add_tab(project)
+            dropped += self._show_project_in_tab(grid, project, restore_saved_ranges=True)
+        self.layout_tabs.setCurrentIndex(first_new + layout.active_tab)
+        return dropped
+
+    def _pick_tab(self, layout: LayoutFile, title: str) -> ProjectState | None:
+        """The one tab to load from a layout file -- asked for when the
+        file holds several."""
+        if len(layout.tabs) == 1:
+            return layout.tabs[0]
+        names = [tab.name for tab in layout.tabs]
+        name, ok = QInputDialog.getItem(
+            self, title, "This file has several tabs. Load which one?", names, layout.active_tab, False
+        )
+        if not ok:
+            return None
+        return layout.tabs[names.index(name)]
+
+    def _ask_tab_file(self, title: str) -> str:
+        if not self._layout_csv_path:
+            self._warn_load_csv_first()
+            return ""
+        path, _ = QFileDialog.getOpenFileName(self, title, "", "JSON Files (*.json)")
+        return path
+
+    def _on_load_tab_as(self) -> None:
+        path = self._ask_tab_file("Load Tab As")
+        if path:
+            self._load_tab_from_path(path, new_tab=False)
+
+    def _on_load_tab_as_new(self) -> None:
+        path = self._ask_tab_file("Load Tab As New")
+        if path:
+            self._load_tab_from_path(path, new_tab=True)
+
+    def _load_tab_from_path(self, path: str, new_tab: bool) -> None:
+        """Load one tab from a layout file into the current tab (replacing
+        it) or into a new tab. A single-tab file's tab is named after the
+        file; a multi-tab file's keeps its saved name."""
+        layout = self._read_layout_file(path)
+        if layout is None:
+            return
+        project = self._pick_tab(layout, "Load Tab As New" if new_tab else "Load Tab As")
+        if project is None:
+            return
+        if new_tab:
+            project.name = self._unique_tab_name(project.name)
+            grid = self._add_tab(project, self.layout_tabs.currentIndex() + 1)
+        else:
+            grid = self.plot_grid
+            project.name = self._unique_tab_name(project.name, ignore=grid)
+        dropped = self._show_project_in_tab(grid, project, restore_saved_ranges=True)
+        self._refresh_selector_and_controls()
+
+        message = f"Loaded tab '{project.name}' from {Path(path).name}"
         if dropped:
             message += f" ({dropped} series dropped: no longer valid)"
         self.statusBar().showMessage(message)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import uuid
 from dataclasses import dataclass, field
 
 from csv_plot_maker.models.data_source import UNASSIGNED_SOURCE_ID, DataSource, SourceRef
@@ -8,9 +10,16 @@ from csv_plot_maker.models.subplot import SubplotConfig
 
 @dataclass
 class ProjectState:
-    """Top-level app state: the loaded CSV path and the full subplot grid."""
+    """One layout tab's state: its subplot grid and every series in it.
+
+    Several of these can be open at once, one per layout tab (see
+    MainWindow); the open CSV files themselves are shared by every tab.
+    """
 
     csv_path: str | None = None
+    # The layout tab's title. Only stored in a multi-tab layout file -- a
+    # single-tab layout file is named after the file itself when loaded.
+    name: str = ""
     grid_rows: int = 1
     grid_cols: int = 1
     active_subplot_id: str | None = None
@@ -31,6 +40,22 @@ class ProjectState:
             for c in range(self.grid_cols)
         ]
         self.active_subplot_id = self.subplots[0].id if self.subplots else None
+
+    def has_series(self) -> bool:
+        return any(sp.series for sp in self.subplots)
+
+    def clone_with_new_ids(self) -> ProjectState:
+        """A deep copy whose subplots and series all get fresh ids, so the
+        copy (a duplicated tab) never shares an id with the original."""
+        clone = copy.deepcopy(self)
+        for subplot in clone.subplots:
+            old_id = subplot.id
+            subplot.id = uuid.uuid4().hex
+            if clone.active_subplot_id == old_id:
+                clone.active_subplot_id = subplot.id
+            for series in subplot.series:
+                series.id = uuid.uuid4().hex
+        return clone
 
     def get_active_subplot(self) -> SubplotConfig | None:
         return next((sp for sp in self.subplots if sp.id == self.active_subplot_id), None)
