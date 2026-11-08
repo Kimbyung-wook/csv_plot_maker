@@ -8,14 +8,22 @@ is only what a plain `uv run python -m csv_plot_maker.main` (not a built
 .exe) shows.
 """
 
-__version__ = "1.10.0"
-BUILD_DATE = "2026-11-06"
+__version__ = "1.10.1"
+BUILD_DATE = "2026-11-08"
 
 # (version, date, bullet points) -- newest first, shown verbatim in
 # Info > Version History (see ui/version_history_dialog.py). Add a new entry
 # here whenever __version__ is bumped; keep each bullet short (개조식) rather
 # than a full sentence.
 VERSION_HISTORY: list[tuple[str, str, list[str]]] = [
+    (
+        "1.10.1",
+        "2026-11-08",
+        [
+            "탭이 많아 넘치면 탭 줄 왼쪽에 탭 목록(⋯) 버튼 표시",
+            "탭이 넘칠 때 + 버튼을 오른쪽 끝에 고정(탭·스크롤 버튼 가림 수정)",
+        ],
+    ),
     (
         "1.10.0",
         "2026-11-06",

@@ -395,3 +395,42 @@ def test_add_button_sits_right_after_the_last_tab(qtbot):
 
     win.layout_tabs.add_button.click()
     assert win.layout_tabs.count() == 2
+
+
+def test_tab_list_and_pinned_add_button_appear_only_when_tabs_overflow(qtbot):
+    win = _window(qtbot)
+    win.resize(1000, 500)
+    win.show()
+    qtbot.waitExposed(win)
+    tabs = win.layout_tabs
+    qtbot.wait(10)
+    assert not tabs.is_overflowing()
+    assert not tabs.list_button.isVisible()
+    assert not tabs.corner_add_button.isVisible()
+
+    while tabs.tabBar().tabs_width() <= tabs.width():
+        win._on_add_tab_requested()
+    qtbot.wait(10)
+    assert tabs.is_overflowing()
+    assert tabs.list_button.isVisible()
+    assert tabs.corner_add_button.isVisible()
+    assert not tabs.add_button.isVisible()  # the in-bar "+" gives way
+
+    menu = tabs.tab_list_menu()
+    actions = menu.actions()
+    assert [a.text() for a in actions] == tabs.tab_names()
+    assert [a.isChecked() for a in actions].index(True) == tabs.currentIndex()
+    actions[0].trigger()
+    assert tabs.currentIndex() == 0
+
+    count = tabs.count()
+    tabs.corner_add_button.click()
+    assert tabs.count() == count + 1
+
+    while tabs.count() > 1:
+        win._on_close_tab_requested(tabs.count() - 1)
+    qtbot.wait(10)
+    assert not tabs.is_overflowing()
+    assert not tabs.list_button.isVisible()
+    assert not tabs.corner_add_button.isVisible()
+    assert tabs.add_button.isVisible()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QSize, Qt, Signal
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -14,15 +14,15 @@ from PySide6.QtWidgets import (
 )
 
 
-class _AddTabButton(QAbstractButton):
-    """The "+" button, drawn as an unselected tab by the current style (so
-    it looks like one more tab and follows the light/dark palette)."""
+class _TabShapedButton(QAbstractButton):
+    """A small button ("+", "⋯") drawn as an unselected tab by the current
+    style, so it looks like one more tab and follows the light/dark palette."""
 
-    def __init__(self, tab_bar: QTabBar) -> None:
-        super().__init__(tab_bar)
+    def __init__(self, tab_bar: QTabBar, text: str, tooltip: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else tab_bar)
         self._tab_bar = tab_bar
-        self.setText("+")
-        self.setToolTip("Add a layout tab")
+        self.setText(text)
+        self.setToolTip(tooltip)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover)
 
@@ -44,6 +44,7 @@ class _AddTabButton(QAbstractButton):
         self.style().drawControl(QStyle.ControlElement.CE_TabBarTabShape, option, painter, self)
         font = painter.font()
         font.setBold(True)
+        font.setPointSizeF(font.pointSizeF() * 1.3)
         painter.setFont(font)
         painter.setPen(self.palette().windowText().color())
         painter.drawText(self.rect(), Qt.AlignCenter, self.text())
@@ -54,10 +55,17 @@ class _LayoutTabBar(QTabBar):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.add_button = _AddTabButton(self)
+        self.add_button = _TabShapedButton(self, "+", "Add a layout tab")
+        # Set by LayoutTabWidget when the tabs don't all fit: the in-bar "+"
+        # then hides and a copy pinned at the right end takes over.
+        self.overflowing = False
 
     def _button_width(self) -> int:
-        return self.add_button.sizeHint().width()
+        return 0 if self.overflowing else self.add_button.sizeHint().width()
+
+    def tabs_width(self) -> int:
+        """Width all tabs plus the in-bar "+" need to be shown unscrolled."""
+        return super().sizeHint().width() + self.add_button.sizeHint().width()
 
     def sizeHint(self) -> QSize:
         hint = super().sizeHint()
@@ -68,10 +76,16 @@ class _LayoutTabBar(QTabBar):
         return QSize(hint.width() + self._button_width(), hint.height())
 
     def _place_add_button(self) -> None:
+        parent = self.parentWidget()
+        if isinstance(parent, LayoutTabWidget):
+            parent._update_overflow()
+        if self.overflowing:
+            self.add_button.hide()
+            return
+        self.add_button.show()
         # QTabWidget only re-sizes its tab bar when tabs are added/removed, so
         # a tab that got wider (renamed) would push "+" off the bar's end.
         # Grow the bar ourselves (resizeEvent calls back here once more).
-        parent = self.parentWidget()
         if parent is not None:
             wanted = min(self.sizeHint().width(), parent.width())
             if self.width() < wanted:
@@ -79,7 +93,6 @@ class _LayoutTabBar(QTabBar):
                 return
         size = self.add_button.sizeHint()
         x = self.tabRect(self.count() - 1).right() + 1 if self.count() else 0
-        # With more tabs than fit, keep it visible at the right edge.
         x = max(0, min(x, self.width() - size.width()))
         y = self.tabRect(0).top() if self.count() else 0
         self.add_button.setGeometry(x, y, size.width(), size.height())
@@ -97,8 +110,8 @@ class _LayoutTabBar(QTabBar):
 class LayoutTabWidget(QTabWidget):
     """The central area: one tab per layout, each page a PlotGridWidget.
 
-    Only the tab bar's own interactions live here (add button, rename,
-    context menu, keeping the last tab unclosable); what a tab *holds* is
+    Only the tab bar's own interactions live here (add button, tab list,
+    rename, context menu, keeping the last tab unclosable); what a tab *holds* is
     MainWindow's business, so adding/duplicating/closing are only requested
     via signals and carried out there.
     """
@@ -120,6 +133,17 @@ class LayoutTabWidget(QTabWidget):
 
         self.add_button = self.tabBar().add_button
         self.add_button.clicked.connect(self.add_requested.emit)
+
+        # When the tabs don't all fit (the bar scrolls), "⋯" at the left end
+        # lists every tab to jump to, and "+" is pinned at the right end.
+        self.list_button = _TabShapedButton(self.tabBar(), "⋯", "Show all layout tabs", self)
+        self.list_button.clicked.connect(self._show_tab_list)
+        self.setCornerWidget(self.list_button, Qt.TopLeftCorner)
+        self.corner_add_button = _TabShapedButton(self.tabBar(), "+", "Add a layout tab", self)
+        self.corner_add_button.clicked.connect(self.add_requested.emit)
+        self.setCornerWidget(self.corner_add_button, Qt.TopRightCorner)
+        self.list_button.hide()
+        self.corner_add_button.hide()
 
         self.tabCloseRequested.connect(self.close_requested.emit)
         self.tabBarDoubleClicked.connect(self._on_tab_double_clicked)
@@ -147,6 +171,39 @@ class LayoutTabWidget(QTabWidget):
         # Showing/hiding the close buttons resizes the tabs without a
         # tabLayoutChange(), so the "+" button has to follow by hand.
         self.tabBar()._place_add_button()
+
+    def is_overflowing(self) -> bool:
+        return self.tabBar().overflowing
+
+    def _update_overflow(self) -> None:
+        bar = self.tabBar()
+        overflowing = self.count() > 1 and bar.tabs_width() > self.width()
+        if overflowing == bar.overflowing:
+            return
+        bar.overflowing = overflowing
+        self.list_button.setVisible(overflowing)
+        self.corner_add_button.setVisible(overflowing)
+        # Corner widgets showing/hiding doesn't re-lay the bar out by itself.
+        QCoreApplication.postEvent(self, QEvent(QEvent.Type.LayoutRequest))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_overflow()
+
+    def tab_list_menu(self) -> QMenu:
+        """Menu of every tab (current one checked); choosing one switches to it."""
+        menu = QMenu(self)
+        for index, name in enumerate(self.tab_names()):
+            action = menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(index == self.currentIndex())
+            action.triggered.connect(lambda _checked=False, i=index: self.setCurrentIndex(i))
+        return menu
+
+    def _show_tab_list(self) -> None:
+        menu = self.tab_list_menu()
+        menu.exec(self.list_button.mapToGlobal(self.list_button.rect().bottomLeft()))
+        menu.deleteLater()
 
     def ask_rename(self, index: int) -> None:
         if not 0 <= index < self.count():
